@@ -29,7 +29,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, help="Path to an .osim model.")
     parser.add_argument("--trc", type=Path, help="Path to a .trc marker file.")
     parser.add_argument("--window-size", type=int, default=10, help="Number of frames per IK window.")
-    parser.add_argument("--max-windows", type=int, default=20, help="How many rolling windows to test. Use 0 for all.")
+    parser.add_argument(
+        "--max-windows",
+        type=int,
+        default=0,
+        help="How many rolling windows to test. Defaults to all windows.",
+    )
     parser.add_argument("--step", type=int, default=1, help="How many frames to slide forward each iteration.")
     return parser.parse_args()
 

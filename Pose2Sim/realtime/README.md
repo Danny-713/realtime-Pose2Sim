@@ -1,30 +1,48 @@
-# Pose2Sim Realtime Bootstrap
+# Pose2Sim Realtime Layout
 
-This folder is the starting point for a realtime pipeline that stays parallel to
-the existing offline Pose2Sim workflow.
+This folder is the realtime branch that stays parallel to the existing offline
+Pose2Sim workflow.
 
-Current scope:
+## Runtime-facing modules
 
-- `types.py`: in-memory packet types passed between realtime stages
-- `config.py`: a realtime-focused config view built on top of the existing
-  `Config.toml` loading logic
-- `marker_buffer.py`: rolling 3D marker buffer for small-window IK
-- `pipeline.py`: orchestration skeleton that wires realtime stages together
+These are the files that define the future stage-1 realtime path and should be
+the first place to look:
 
-Intentional non-goals in this first step:
+- `pipeline.py`: realtime pipeline main entry point
+- `capture.py`: frame-source contract and replay bootstrap source
+- `triangulate_frame.py`: per-frame triangulation contract
+- `filter_realtime.py`: causal realtime-safe filters
+- `marker_buffer.py`: sliding 3D marker window for small-window IK
 
-- No change to the existing offline pipeline
-- No hard dependency on a specific camera backend
-- No direct OpenSim API binding logic yet
-- No network transport implementation yet
+## Support modules
 
-Recommended next implementation order:
+These files are still useful, but they support the runtime modules rather than
+define the main architecture:
 
-1. Add `capture.py` for live or file-backed multi-camera sources.
-2. Add `pose2d.py` with a frame-oriented wrapper around the existing RTMLib setup.
-3. Add `association.py` and `triangulation.py` wrappers that reuse offline core
-   math but avoid file IO.
-4. Add a realtime-safe filter in `filtering.py`.
-5. Add `opensim_model.py` and `opensim_ik.py` for small-window IK.
-6. Add `transport.py` and a local viewer client if server-side execution stays
-   headless.
+- `packets.py`: in-memory packet/data types passed between stages
+- `config.py`: realtime-oriented config view built on top of `Config.toml`
+
+## Stage-0 validation scripts
+
+These scripts exist to validate the OpenSim backend before the full realtime
+front-half is wired up:
+
+- `test_api_visualizer.py`
+- `test_opensim_api_ik.py`
+- `test_opensim_window_ik.py`
+- `test_opensim_window_visualizer.py`
+
+## Current boundaries
+
+- No changes to the existing offline pipeline
+- No camera-specific backend committed yet
+- No direct network transport implementation yet
+- OpenSim validation is script-first; production modules come next
+
+## Recommended next implementation order
+
+1. Expand `capture.py` to real multi-camera sources.
+2. Add `pose2d.py` and `association.py` wrappers for frame-oriented inference.
+3. Replace the callable adapter in `triangulate_frame.py` with extracted offline core logic.
+4. Replace the bootstrap filter in `filter_realtime.py` with Kalman or single-pass OneEuro.
+5. Add `opensim_ik.py` and `visualizer.py` production modules around the validated stage-0 scripts.

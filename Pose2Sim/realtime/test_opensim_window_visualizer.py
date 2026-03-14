@@ -27,13 +27,18 @@ from typing import Sequence
 
 import opensim as osim
 
-
 def parse_args() -> argparse.Namespace:
+
     parser = argparse.ArgumentParser(description="Replay rolling-window IK and drive the OpenSim API Visualizer.")
     parser.add_argument("--model", type=Path, help="Path to an .osim model.")
     parser.add_argument("--trc", type=Path, help="Path to a .trc marker file.")
     parser.add_argument("--window-size", type=int, default=10, help="Number of frames per rolling IK window.")
-    parser.add_argument("--max-windows", type=int, default=30, help="How many windows to replay. Use 0 for all.")
+    parser.add_argument(
+        "--max-windows",
+        type=int,
+        default=0,
+        help="How many windows to replay. Defaults to all windows.",
+    )
     parser.add_argument("--step", type=int, default=1, help="How many frames to slide forward per iteration.")
     parser.add_argument(
         "--replay-fps",
@@ -187,10 +192,10 @@ def build_window_table(
     end_time: float,
 ) -> osim.TimeSeriesTableVec3:
     try:
-        window_table = osim.TimeSeriesTableVec3(full_table)
+        window_table = osim.TimeSeriesTableVec3(full_table)#拷贝一份full_table
     except Exception:
         window_table = osim.TimeSeriesTableVec3(str(trc_path))
-    window_table.trim(float(start_time), float(end_time))
+    window_table.trim(float(start_time), float(end_time))#截取start_time到end_time之间的数据
     return window_table
 
 
@@ -224,7 +229,7 @@ def main() -> None:
     model = osim.Model(str(model_path))
     if not args.no_visualizer:
         model.setUseVisualizer(True)
-    state = model.initSystem()
+    state = model.initSystem()#初始化状态
     viz = model.getVisualizer() if not args.no_visualizer else None
 
     marker_set = model.getMarkerSet()
@@ -262,9 +267,9 @@ def main() -> None:
         start_time = float(times[start_idx])
         end_time = float(times[end_idx])
 
-        window_table = build_window_table(full_table, trc_path, start_time, end_time)
-        markers_ref, markers_ctor = build_markers_reference(window_table, weights)
-        solver, solver_ctor = build_ik_solver(model, markers_ref)
+        window_table = build_window_table(full_table, trc_path, start_time, end_time)#建立滑动窗口表
+        markers_ref, markers_ctor = build_markers_reference(window_table, weights)#建立markers参考
+        solver, solver_ctor = build_ik_solver(model, markers_ref)#建立ik求解器
 
         if window_idx == 1:
             print(f"[info] Using {markers_ctor}")
@@ -275,9 +280,9 @@ def main() -> None:
         if hasattr(solver, "setAdvanceTimeFromReference"):
             solver.setAdvanceTimeFromReference(False)
 
-        state.setTime(end_time)
+        state.setTime(end_time)#只改变时间，不改变状态
         t0 = time.perf_counter()
-        solver.assemble(state)
+        solver.assemble(state)#求解当前状态，得到关节角度
         solve_ms = (time.perf_counter() - t0) * 1000.0
         solve_times_ms.append(solve_ms)
 

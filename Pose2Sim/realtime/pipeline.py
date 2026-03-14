@@ -4,13 +4,16 @@
 """
 Realtime pipeline orchestration.
 
-This file provides a minimal end-to-end in-memory execution flow. The concrete
-camera capture, 2D pose, association, triangulation, realtime IK, publishing
-and visualization backends are injected as components.
+This is the main entry point for the runtime-facing realtime package. The
+capture backend, pose estimator, per-frame triangulator, optional causal
+filter, rolling marker buffer, IK solver, and output sinks are wired together
+here.
 """
 
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
+from Pose2Sim.realtime.capture import FrameSource
+from Pose2Sim.realtime.filter_realtime import RealtimePoseFilter
 from Pose2Sim.realtime.marker_buffer import SlidingMarkerBuffer
 from Pose2Sim.realtime.packets import (
     FramePacket,
@@ -19,6 +22,7 @@ from Pose2Sim.realtime.packets import (
     Pose2DPacket,
     Pose3DPacket,
 )
+from Pose2Sim.realtime.triangulate_frame import FrameTriangulator
 
 
 class RealtimePipeline:
@@ -31,12 +35,12 @@ class RealtimePipeline:
 
     def __init__(
         self,
-        frame_source: Any,
+        frame_source: FrameSource,
         pose2d_estimator: Any,
-        triangulator: Any,
+        triangulator: FrameTriangulator,
         marker_buffer: SlidingMarkerBuffer,
         associator: Optional[Any] = None,
-        pose3d_filter: Optional[Any] = None,
+        pose3d_filter: Optional[RealtimePoseFilter] = None,
         ik_solver: Optional[Any] = None,
         visualizer: Optional[Any] = None,
         recorder: Optional[Any] = None,
