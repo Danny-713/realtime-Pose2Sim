@@ -37,6 +37,14 @@ class SlidingMarkerBuffer:
 
     def push(self, packet: Pose3DPacket) -> None:
         marker_names = tuple(packet.marker_names)
+        markers_3d = np.asarray(packet.markers_3d, dtype=float)
+        if markers_3d.ndim != 2 or markers_3d.shape[1] != 3:
+            raise ValueError("Pose3DPacket.markers_3d must have shape (n_markers, 3).")
+        if len(marker_names) != markers_3d.shape[0]:
+            raise ValueError(
+                f"Pose3DPacket marker name count {len(marker_names)} does not match markers array "
+                f"shape {markers_3d.shape}."
+            )
         if self.expected_marker_names is None:
             self.expected_marker_names = marker_names
         elif marker_names != self.expected_marker_names:
@@ -60,6 +68,8 @@ class SlidingMarkerBuffer:
         frame_ids = tuple(packet.frame_id for packet in packets)
         timestamps = np.asarray([packet.timestamp for packet in packets], dtype=float)
         markers_3d = np.stack([packet.markers_3d for packet in packets], axis=0)
+        if markers_3d.ndim != 3 or markers_3d.shape[2] != 3:
+            raise RuntimeError(f"SlidingMarkerBuffer expected stacked marker data of shape (T, M, 3), got {markers_3d.shape}.")
 
         return MarkerWindow(
             frame_ids=frame_ids,

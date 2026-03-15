@@ -10,7 +10,10 @@ filter, rolling marker buffer, IK solver, and output sinks are wired together
 here.
 """
 
+import time
 from typing import Any, List, Optional, Sequence
+
+import numpy as np
 
 from Pose2Sim.realtime.capture import FrameSource
 from Pose2Sim.realtime.filter_realtime import RealtimePoseFilter
@@ -59,16 +62,25 @@ class RealtimePipeline:
         self.publisher = publisher
         self.min_window_size = min_window_size
         self._running = False
+        self.last_step_metrics: dict[str, Any] = {}
 
     def start(self) -> None:
         if hasattr(self.frame_source, "start"):
             self.frame_source.start()
+        if self.recorder is not None and hasattr(self.recorder, "start"):
+            self.recorder.start()
         self._running = True
 
     def stop(self) -> None:
         self._running = False
         if hasattr(self.frame_source, "stop"):
             self.frame_source.stop()
+        if self.recorder is not None and hasattr(self.recorder, "close"):
+            self.recorder.close()
+        if self.visualizer is not None and hasattr(self.visualizer, "close"):
+            self.visualizer.close()
+        if self.publisher is not None and hasattr(self.publisher, "close"):
+            self.publisher.close()
 
     def run_forever(self) -> None:
         self.start()
@@ -76,18 +88,42 @@ class RealtimePipeline:
             while self._running:
                 frame_packets = self.frame_source.read()
                 if not frame_packets:
-                    continue
+                    break
                 self.run_step(frame_packets)
         finally:
             self.stop()
 
     def run_step(self, frame_packets: Sequence[FramePacket]) -> Optional[OpenSimStatePacket]:
+        step_metrics: dict[str, Any] = {
+            "pose2d_ms": 0.0,
+            "triangulate_ms": 0.0,
+            "filter_ms": 0.0,
+            "ik_ms": 0.0,
+            "valid_markers": 0,
+            "reprojection_error": np.nan,
+            "num_markers_in_use": 0,
+            "window_range": None,
+        }
+
+        t0 = time.perf_counter()
         pose2d_packets = self._infer_2d(frame_packets)
+        step_metrics["pose2d_ms"] = (time.perf_counter() - t0) * 1000.0
+
         multiview_packet = self._associate(pose2d_packets)
+
+        t0 = time.perf_counter()
         pose3d_packet = self.triangulator.triangulate(multiview_packet)
+        step_metrics["triangulate_ms"] = (time.perf_counter() - t0) * 1000.0
 
         if self.pose3d_filter is not None:
+            t0 = time.perf_counter()
             pose3d_packet = self.pose3d_filter.update(pose3d_packet)
+            step_metrics["filter_ms"] = (time.perf_counter() - t0) * 1000.0
+
+        markers_3d = np.asarray(pose3d_packet.markers_3d, dtype=float)
+        if markers_3d.ndim == 2 and markers_3d.shape[1] == 3:
+            step_metrics["valid_markers"] = int(np.sum(np.isfinite(markers_3d[:, 0])))
+        step_metrics["reprojection_error"] = pose3d_packet.reprojection_error
 
         self.marker_buffer.push(pose3d_packet)
 
@@ -95,11 +131,17 @@ class RealtimePipeline:
             self.recorder.record_pose3d(pose3d_packet)
 
         if self.ik_solver is None or not self.marker_buffer.ready(self.min_window_size):
+            self.last_step_metrics = step_metrics
             return None
 
         marker_window = self.marker_buffer.latest_window(self.min_window_size)
+        step_metrics["window_range"] = (marker_window.start_frame, marker_window.end_frame)
+        t0 = time.perf_counter()
         state_packet = self.ik_solver.solve_window(marker_window)
+        step_metrics["ik_ms"] = (time.perf_counter() - t0) * 1000.0
+        step_metrics["num_markers_in_use"] = int(state_packet.metadata.get("num_markers_in_use", 0))
         self._fan_out_state(state_packet)
+        self.last_step_metrics = step_metrics
         return state_packet
 
     def _infer_2d(self, frame_packets: Sequence[FramePacket]) -> List[Pose2DPacket]:

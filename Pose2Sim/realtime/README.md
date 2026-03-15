@@ -1,48 +1,108 @@
-# Pose2Sim Realtime Layout
+# Pose2Sim Realtime V1
 
-This folder is the realtime branch that stays parallel to the existing offline
-Pose2Sim workflow.
+`Pose2Sim/realtime/` is the first production-facing realtime path that runs in
+parallel to the existing offline pipeline.
 
-## Runtime-facing modules
+Current V1 scope is intentionally narrow:
 
-These are the files that define the future stage-1 realtime path and should be
-the first place to look:
+- single person
+- synchronized multi-video replay
+- same-machine OpenSim API Visualizer
+- in-memory data flow from replay frames to OpenSim state packets
 
-- `pipeline.py`: realtime pipeline main entry point
-- `capture.py`: frame-source contract and replay bootstrap source
-- `triangulate_frame.py`: per-frame triangulation contract
-- `filter_realtime.py`: causal realtime-safe filters
-- `marker_buffer.py`: sliding 3D marker window for small-window IK
+Out of scope for this stage:
 
-## Support modules
+- automatic synchronization
+- marker augmentation
+- OpenSim GUI integration
+- server-to-client transport
+- multi-person association
 
-These files are still useful, but they support the runtime modules rather than
-define the main architecture:
+## Main entry point
 
-- `packets.py`: in-memory packet/data types passed between stages
-- `config.py`: realtime-oriented config view built on top of `Config.toml`
+Use `run_file_replay.py` as the V1 runtime entry point.
 
-## Stage-0 validation scripts
+Replay without GUI:
 
-These scripts exist to validate the OpenSim backend before the full realtime
-front-half is wired up:
+```bash
+conda activate Pose2Sim
+python Pose2Sim/realtime/run_file_replay.py --config Pose2Sim/Demo_SinglePerson/Config.toml --no-visualizer
+```
+
+Replay with an explicit trial model for comparison:
+
+```bash
+conda activate Pose2Sim
+python Pose2Sim/realtime/run_file_replay.py --config Pose2Sim/Demo_SinglePerson/Config.toml --no-visualizer --model-path Pose2Sim/Demo_SinglePerson/kinematics/Demo_SinglePerson_1-96_filt_butterworth_LSTM.osim
+```
+
+Replay with API Visualizer:
+
+```bash
+conda activate Pose2Sim
+python Pose2Sim/realtime/run_file_replay.py --config Pose2Sim/Demo_SinglePerson/Config.toml
+```
+
+Force MOT recording:
+
+```bash
+conda activate Pose2Sim
+python Pose2Sim/realtime/run_file_replay.py --config Pose2Sim/Demo_SinglePerson/Config.toml --no-visualizer --record-mot
+```
+
+## Runtime path
+
+The current V1 replay path is:
+
+`videos/*.mp4 -> pose2d -> single-person multiview packet -> per-frame triangulation -> causal realtime filter -> sliding marker window -> realtime IK -> OpenSimStatePacket -> visualizer/recorder`
+
+The main runtime modules are:
+
+- `run_file_replay.py`: V1 replay runner
+- `pipeline.py`: stage orchestration
+- `capture.py`: multi-video replay capture
+- `pose2d.py`: single-person per-camera 2D estimation
+- `triangulate_frame.py`: per-frame 3D triangulation
+- `filter_realtime.py`: causal realtime filters
+- `marker_buffer.py`: sliding window for small-window IK
+- `opensim_ik.py`: rolling-window OpenSim IK
+- `opensim_viz.py`: API Visualizer backend
+- `recorder.py`: optional coordinate/MOT output
+
+Support modules:
+
+- `packets.py`: in-memory packet contracts
+- `config.py`: realtime config view over `Config.toml`
+
+## Defaults and behavior
+
+- Replay input is auto-discovered from `project_dir/videos/*.mp4` when `realtime.capture.sources` is empty.
+- Calibration is auto-discovered from `project_dir/calibration/*.toml` when `realtime.calib_file` is empty.
+- OpenSim model resolution is:
+  - use `realtime.ik.model_path` or `--model-path` when explicitly provided
+  - otherwise, if `realtime.ik.use_simple_model=true`, use the simple setup model
+  - otherwise fall back to an existing `project_dir/kinematics/*.osim`
+- The current V1 baseline is the simple model path; trial/complex models are kept as explicit comparison paths.
+- `playback_fps <= 0` means full-speed replay; no artificial slow-down is added.
+- `--record-mot` forces coordinate recording and writes `realtime.mot`.
+- Recorder outputs go to `project_dir/realtime_output/` by default.
+- The runner prints a stage summary with capture, pose2d, triangulate, filter, and ik average timings.
+- The runner also reports average valid 3D markers, average markers used by IK, and average reprojection error.
+
+## Stage-0 regression scripts
+
+These scripts are kept as OpenSim/backend regression checks:
 
 - `test_api_visualizer.py`
 - `test_opensim_api_ik.py`
 - `test_opensim_window_ik.py`
 - `test_opensim_window_visualizer.py`
 
-## Current boundaries
+They are not the V1 production entry point.
 
-- No changes to the existing offline pipeline
-- No camera-specific backend committed yet
-- No direct network transport implementation yet
-- OpenSim validation is script-first; production modules come next
+## Common notes
 
-## Recommended next implementation order
-
-1. Expand `capture.py` to real multi-camera sources.
-2. Add `pose2d.py` and `association.py` wrappers for frame-oriented inference.
-3. Replace the callable adapter in `triangulate_frame.py` with extracted offline core logic.
-4. Replace the bootstrap filter in `filter_realtime.py` with Kalman or single-pass OneEuro.
-5. Add `opensim_ik.py` and `visualizer.py` production modules around the validated stage-0 scripts.
+- The runner creates `.codex_runtime/` under the repo root for temporary files and Matplotlib config to avoid noisy startup issues.
+- If `pose.backend=auto` fails on the current machine, the realtime estimator will fall back to CPU backends and log the selected runtime backend per camera.
+- GUI mode is intended for a local desktop session. Headless deployment is not part of this stage.
+- Current performance work treats simple model as the default realtime baseline; trial models may still run, but are expected to be slower.

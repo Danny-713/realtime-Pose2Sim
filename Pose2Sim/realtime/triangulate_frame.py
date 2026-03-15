@@ -2,16 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-Per-frame triangulation entry points.
-
-The long-term goal is to extract and wrap the reusable math from
-``Pose2Sim/triangulation.py`` so realtime code can stay in-memory. For now this
-module defines the narrow interface the realtime pipeline expects.
+Per-frame triangulation for the realtime pipeline.
 """
 
 from __future__ import annotations
 
-from typing import Callable, Protocol, runtime_checkable
+from pathlib import Path
+from typing import Callable, Mapping, Protocol, Sequence, runtime_checkable
+
+import numpy as np
 
 from Pose2Sim.realtime.packets import MultiViewPosePacket, Pose3DPacket
 
@@ -31,9 +30,6 @@ class FrameTriangulator(Protocol):
 class CallableFrameTriangulator:
     """
     Thin adapter around a plain callable.
-
-    This keeps early experiments simple while still giving the pipeline a
-    stable object-level interface.
     """
 
     def __init__(self, triangulate_fn: Callable[[MultiViewPosePacket], Pose3DPacket]):
@@ -43,4 +39,129 @@ class CallableFrameTriangulator:
         return self._triangulate_fn(packet)
 
 
-__all__ = ["FrameTriangulator", "CallableFrameTriangulator"]
+class RealtimeFrameTriangulator:
+    """
+    Single-person per-frame triangulator backed by the offline core math.
+    """
+
+    def __init__(
+        self,
+        config_dict: Mapping[str, object],
+        calib_file: str,
+        camera_ids: Sequence[str],
+        marker_names: Sequence[str],
+    ):
+        if not calib_file:
+            raise ValueError("RealtimeFrameTriangulator requires a calibration file.")
+
+        self.config_dict = config_dict
+        self.calib_file = str(Path(calib_file).resolve())
+        self.marker_names = tuple(marker_names)
+
+        from Pose2Sim.common import computeP, retrieve_calib_params
+
+        self._toml = __import__("toml")
+        self.calib = self._toml.load(self.calib_file)
+        self.calib_camera_ids = tuple(
+            key
+            for key, value in self.calib.items()
+            if key not in {"metadata", "capture_volume", "charuco", "checkerboard"} and isinstance(value, dict)
+        )
+        self.calib_params = retrieve_calib_params(self.calib_file)
+        self.projection_matrices = computeP(
+            self.calib_file,
+            undistort=bool(config_dict.get("triangulation", {}).get("undistort_points", False)),
+        )
+        self.camera_ids = self._resolve_camera_order(camera_ids)
+        self.camera_index_by_id = {camera_id: idx for idx, camera_id in enumerate(self.camera_ids)}
+        self.swap_indices = self._build_swap_indices(self.marker_names)
+
+        from Pose2Sim.triangulation import triangulation_from_best_cameras
+
+        self._triangulation_from_best_cameras = triangulation_from_best_cameras
+
+    def _resolve_camera_order(self, runtime_camera_ids: Sequence[str]) -> tuple[str, ...]:
+        runtime_ids = {str(camera_id).lower(): str(camera_id) for camera_id in runtime_camera_ids}
+        resolved = []
+        for calib_id in self.calib_camera_ids:
+            match = runtime_ids.get(calib_id.lower())
+            if match is None:
+                raise ValueError(
+                    f"Calibration camera '{calib_id}' is missing from realtime capture ids {tuple(runtime_camera_ids)}."
+                )
+            resolved.append(match)
+        return tuple(resolved)
+
+    @staticmethod
+    def _build_swap_indices(marker_names: Sequence[str]) -> tuple[int, ...]:
+        index_by_name = {name: idx for idx, name in enumerate(marker_names)}
+        swap_indices = []
+        for name in marker_names:
+            if name.startswith("R") and ("L" + name[1:]) in index_by_name:
+                swap_indices.append(index_by_name["L" + name[1:]])
+            elif name.startswith("L") and ("R" + name[1:]) in index_by_name:
+                swap_indices.append(index_by_name["R" + name[1:]])
+            else:
+                swap_indices.append(index_by_name[name])
+        return tuple(swap_indices)
+
+    def triangulate(self, packet: MultiViewPosePacket) -> Pose3DPacket:
+        marker_positions = []
+        reprojection_errors = []
+        excluded_camera_counts = []
+
+        for marker_index, marker_name in enumerate(self.marker_names):
+            coords = self._collect_camera_coords(packet, marker_index)
+            swapped_coords = self._collect_camera_coords(packet, self.swap_indices[marker_index])
+
+            x_all = coords[:, 0]
+            y_all = coords[:, 1]
+            likelihood_all = coords[:, 2]
+            x_all_swapped = swapped_coords[:, 0]
+            y_all_swapped = swapped_coords[:, 1]
+            likelihood_all_swapped = swapped_coords[:, 2]
+
+            q, error_min, nb_cams_excluded, excluded_camera_ids = self._triangulation_from_best_cameras(
+                self.config_dict,
+                (x_all, y_all, likelihood_all),
+                (x_all_swapped, y_all_swapped, likelihood_all_swapped),
+                self.projection_matrices,
+                self.calib_params,
+            )
+            marker_positions.append(np.asarray(q, dtype=float))
+            if np.isfinite(error_min):
+                reprojection_errors.append(float(error_min))
+            excluded_camera_counts.append(int(nb_cams_excluded))
+
+        marker_array = np.asarray(marker_positions, dtype=float)
+        reprojection_error = float(np.mean(reprojection_errors)) if reprojection_errors else np.nan
+
+        return Pose3DPacket(
+            frame_id=packet.frame_id,
+            timestamp=packet.timestamp,
+            marker_names=self.marker_names,
+            markers_3d=marker_array,
+            reprojection_error=reprojection_error,
+            source_camera_ids=tuple(self.camera_ids),
+            metadata={
+                "mean_excluded_cameras": float(np.mean(excluded_camera_counts)) if excluded_camera_counts else 0.0,
+                "num_valid_markers": int(np.sum(np.isfinite(marker_array[:, 0]))),
+            },
+        )
+
+    def _collect_camera_coords(self, packet: MultiViewPosePacket, marker_index: int) -> np.ndarray:
+        coords = np.full((len(self.camera_ids), 3), np.nan, dtype=float)
+        for camera_idx, camera_id in enumerate(self.camera_ids):
+            pose_packet = packet.poses_by_camera.get(camera_id)
+            if pose_packet is None:
+                continue
+            if marker_index >= pose_packet.keypoints.shape[0]:
+                continue
+            coords[camera_idx, 0] = float(pose_packet.keypoints[marker_index, 0])
+            coords[camera_idx, 1] = float(pose_packet.keypoints[marker_index, 1])
+            if pose_packet.scores is not None and marker_index < pose_packet.scores.shape[0]:
+                coords[camera_idx, 2] = float(pose_packet.scores[marker_index])
+        return coords
+
+
+__all__ = ["FrameTriangulator", "CallableFrameTriangulator", "RealtimeFrameTriangulator"]

@@ -17,10 +17,10 @@ Supporting types and config helpers remain available, but they are secondary to
 those runtime modules.
 """
 
-from Pose2Sim.realtime.capture import FrameSource, ReplayFrameSource
+from Pose2Sim.realtime.capture import FrameSource, ReplayFrameSource, VideoReplayFrameSource
 from Pose2Sim.realtime.filter_realtime import (
-    ExponentialRealtimeFilter,
     PassThroughFilter,
+    RealtimeKalmanFilter,
     RealtimePoseFilter,
 )
 from Pose2Sim.realtime.marker_buffer import SlidingMarkerBuffer
@@ -33,11 +33,13 @@ from Pose2Sim.realtime.packets import (
     Pose3DPacket,
 )
 from Pose2Sim.realtime.pipeline import RealtimePipeline
-from Pose2Sim.realtime.triangulate_frame import CallableFrameTriangulator, FrameTriangulator
+from Pose2Sim.realtime.triangulate_frame import (
+    CallableFrameTriangulator,
+    FrameTriangulator,
+)
 
 __all__ = [
     "CallableFrameTriangulator",
-    "ExponentialRealtimeFilter",
     "FramePacket",
     "FrameSource",
     "FrameTriangulator",
@@ -47,6 +49,7 @@ __all__ = [
     "Pose2DPacket",
     "Pose3DPacket",
     "PassThroughFilter",
+    "RealtimeKalmanFilter",
     "RealtimePoseFilter",
     "RealtimeCaptureConfig",
     "RealtimeConfig",
@@ -54,8 +57,9 @@ __all__ = [
     "RealtimePipeline",
     "ReplayFrameSource",
     "RealtimeRecorderConfig",
-    "RealtimeTransportConfig",
+    "RealtimeVisualizerConfig",
     "SlidingMarkerBuffer",
+    "VideoReplayFrameSource",
     "load_realtime_config",
 ]
 
@@ -66,9 +70,15 @@ def __getattr__(name):
         "RealtimeConfig",
         "RealtimeIKConfig",
         "RealtimeRecorderConfig",
-        "RealtimeTransportConfig",
+        "RealtimeVisualizerConfig",
+        "VideoReplayFrameSource",
         "load_realtime_config",
     }:
+        if name == "VideoReplayFrameSource":
+            from Pose2Sim.realtime.capture import VideoReplayFrameSource
+
+            return VideoReplayFrameSource
+
         from Pose2Sim.realtime import config as realtime_config
 
         return getattr(realtime_config, name)
