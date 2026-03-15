@@ -35,6 +35,9 @@ class RealtimeRecorder:
         self._state_packets: List[OpenSimStatePacket] = []
         self._flushed = False
 
+    def start(self) -> None:
+        """No-op, kept for interface consistency with other pipeline components."""
+
     def record_pose3d(self, pose3d_packet: Pose3DPacket) -> None:
         if self.record_markers:
             self._pose3d_packets.append(pose3d_packet)

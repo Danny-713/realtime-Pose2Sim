@@ -75,6 +75,8 @@ class RealtimePipeline:
         self._running = False
         if hasattr(self.frame_source, "stop"):
             self.frame_source.stop()
+        if hasattr(self.pose2d_estimator, "shutdown"):
+            self.pose2d_estimator.shutdown()
         if self.recorder is not None and hasattr(self.recorder, "close"):
             self.recorder.close()
         if self.visualizer is not None and hasattr(self.visualizer, "close"):

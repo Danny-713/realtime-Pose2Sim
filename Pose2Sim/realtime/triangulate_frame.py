@@ -58,10 +58,11 @@ class RealtimeFrameTriangulator:
         self.calib_file = str(Path(calib_file).resolve())
         self.marker_names = tuple(marker_names)
 
+        import toml as _toml
+
         from Pose2Sim.common import computeP, retrieve_calib_params
 
-        self._toml = __import__("toml")
-        self.calib = self._toml.load(self.calib_file)
+        self.calib = _toml.load(self.calib_file)
         self.calib_camera_ids = tuple(
             key
             for key, value in self.calib.items()
@@ -79,6 +80,24 @@ class RealtimeFrameTriangulator:
         from Pose2Sim.triangulation import triangulation_from_best_cameras
 
         self._triangulation_from_best_cameras = triangulation_from_best_cameras
+
+    @staticmethod
+    def _zup_to_yup(markers_3d: np.ndarray) -> np.ndarray:
+        """
+        Match the offline TRC export convention before handing markers to OpenSim.
+
+        Pose2Sim's offline path writes TRC files after converting per-marker
+        coordinates from Z-up to Y-up by reordering axes as (x, y, z) -> (y, z, x).
+        Realtime OpenSim should consume the same convention, otherwise the model
+        appears rotated/lying down compared with the validated TRC-based path.
+        """
+
+        markers_3d = np.asarray(markers_3d, dtype=float)
+        if markers_3d.ndim != 2 or markers_3d.shape[1] != 3:
+            raise ValueError(
+                f"RealtimeFrameTriangulator expected marker data of shape (n_markers, 3), got {markers_3d.shape}."
+            )
+        return markers_3d[:, [1, 2, 0]]
 
     def _resolve_camera_order(self, runtime_camera_ids: Sequence[str]) -> tuple[str, ...]:
         runtime_ids = {str(camera_id).lower(): str(camera_id) for camera_id in runtime_camera_ids}
@@ -134,6 +153,7 @@ class RealtimeFrameTriangulator:
             excluded_camera_counts.append(int(nb_cams_excluded))
 
         marker_array = np.asarray(marker_positions, dtype=float)
+        marker_array = self._zup_to_yup(marker_array)
         reprojection_error = float(np.mean(reprojection_errors)) if reprojection_errors else np.nan
 
         return Pose3DPacket(

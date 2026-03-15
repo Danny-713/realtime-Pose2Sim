@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -153,7 +154,7 @@ def build_pose_filter(config_dict, frame_rate: float):
 
 
 def _mean_or_nan(values: list[float]) -> float:
-    finite_values = [float(value) for value in values if value is not None and value == value]
+    finite_values = [float(v) for v in values if v is not None and np.isfinite(v)]
     return float(sum(finite_values) / len(finite_values)) if finite_values else float("nan")
 
 
@@ -206,7 +207,11 @@ def main() -> None:
     pose2d_estimator = RealtimePoseEstimator(
         config_dict=realtime_config.raw_config,
         camera_ids=realtime_config.capture.camera_ids,
+        parallel=realtime_config.pose.parallel,
     )
+    logging.info("  rt_pose_mode=%s  rt_det_frequency=%d  parallel=%s",
+                 realtime_config.pose.mode, realtime_config.pose.det_frequency,
+                 realtime_config.pose.parallel)
     logging.info("  runtime_pose_backends=%s", pose2d_estimator.runtime_choices)
     triangulator = RealtimeFrameTriangulator(
         config_dict=realtime_config.raw_config,

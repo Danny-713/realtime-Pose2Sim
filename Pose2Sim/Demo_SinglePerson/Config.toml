@@ -363,5 +363,10 @@ id = 19
            id = 9
 
 
+[realtime.pose]
+mode = 'lightweight'  # Override for realtime: 'lightweight' (faster, recommended), 'balanced', or 'performance'
+det_frequency = 10    # Run detection every N frames during realtime (higher = faster for single-person)
+parallel = true       # Run multi-camera 2D inference in parallel threads
+
 [realtime.ik]
 use_simple_model = true

@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Optional, Protocol, runtime_checkable
 
 import numpy as np
+from filterpy.common import Q_discrete_white_noise
+from filterpy.kalman import KalmanFilter
 
 from Pose2Sim.realtime.packets import Pose3DPacket
 
@@ -37,20 +39,15 @@ class PassThroughFilter:
 
 class _MarkerKalmanState:
     def __init__(self, frame_rate: float, measurement_noise: float, process_noise: float):
-        from filterpy.common import Q_discrete_white_noise
-        from filterpy.kalman import KalmanFilter
-
         self.frame_rate = float(frame_rate)
         self.measurement_noise = float(measurement_noise)
         self.process_noise = float(process_noise)
-        self._KalmanFilter = KalmanFilter
-        self._Q_discrete_white_noise = Q_discrete_white_noise
         self.filter = self._create_filter()
         self.initialized = False
 
     def _create_filter(self):
         dt = 1.0 / self.frame_rate
-        kalman = self._KalmanFilter(dim_x=9, dim_z=3)
+        kalman = KalmanFilter(dim_x=9, dim_z=3)
         kalman.F = np.array(
             [
                 [1.0, dt, (dt**2) / 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -75,7 +72,7 @@ class _MarkerKalmanState:
         )
         kalman.P *= self.measurement_noise
         kalman.R = np.diag([self.measurement_noise**2] * 3)
-        kalman.Q = self._Q_discrete_white_noise(3, dt=dt, var=self.process_noise**2, block_size=3)
+        kalman.Q = Q_discrete_white_noise(3, dt=dt, var=self.process_noise**2, block_size=3)
         return kalman
 
     def update(self, measurement: np.ndarray) -> np.ndarray:

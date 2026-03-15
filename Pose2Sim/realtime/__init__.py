@@ -33,9 +33,11 @@ from Pose2Sim.realtime.packets import (
     Pose3DPacket,
 )
 from Pose2Sim.realtime.pipeline import RealtimePipeline
+from Pose2Sim.realtime.pose2d import RealtimePoseEstimator
 from Pose2Sim.realtime.triangulate_frame import (
     CallableFrameTriangulator,
     FrameTriangulator,
+    RealtimeFrameTriangulator,
 )
 
 __all__ = [
@@ -49,15 +51,18 @@ __all__ = [
     "Pose2DPacket",
     "Pose3DPacket",
     "PassThroughFilter",
-    "RealtimeKalmanFilter",
-    "RealtimePoseFilter",
     "RealtimeCaptureConfig",
     "RealtimeConfig",
+    "RealtimeFrameTriangulator",
     "RealtimeIKConfig",
+    "RealtimeKalmanFilter",
     "RealtimePipeline",
-    "ReplayFrameSource",
+    "RealtimePoseConfig",
+    "RealtimePoseEstimator",
+    "RealtimePoseFilter",
     "RealtimeRecorderConfig",
     "RealtimeVisualizerConfig",
+    "ReplayFrameSource",
     "SlidingMarkerBuffer",
     "VideoReplayFrameSource",
     "load_realtime_config",
@@ -65,20 +70,16 @@ __all__ = [
 
 
 def __getattr__(name):
-    if name in {
+    _config_names = {
         "RealtimeCaptureConfig",
         "RealtimeConfig",
         "RealtimeIKConfig",
+        "RealtimePoseConfig",
         "RealtimeRecorderConfig",
         "RealtimeVisualizerConfig",
-        "VideoReplayFrameSource",
         "load_realtime_config",
-    }:
-        if name == "VideoReplayFrameSource":
-            from Pose2Sim.realtime.capture import VideoReplayFrameSource
-
-            return VideoReplayFrameSource
-
+    }
+    if name in _config_names:
         from Pose2Sim.realtime import config as realtime_config
 
         return getattr(realtime_config, name)

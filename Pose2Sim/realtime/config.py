@@ -44,6 +44,15 @@ class RealtimeVisualizerConfig:
 
 
 @dataclass(frozen=True)
+class RealtimePoseConfig:
+    mode: Optional[str] = "lightweight"
+    det_frequency: int = 10
+    backend: Optional[str] = None
+    device: Optional[str] = None
+    parallel: bool = True
+
+
+@dataclass(frozen=True)
 class RealtimeRecorderConfig:
     enabled: bool = False
     record_markers: bool = False
@@ -57,6 +66,7 @@ class RealtimeConfig:
     calib_file: Optional[str]
     pose_model: str
     capture: RealtimeCaptureConfig
+    pose: RealtimePoseConfig
     ik: RealtimeIKConfig
     visualizer: RealtimeVisualizerConfig
     recorder: RealtimeRecorderConfig
@@ -136,6 +146,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
     realtime_cfg = config_dict.get("realtime", {})
 
     capture_cfg = realtime_cfg.get("capture", {})
+    rt_pose_cfg = realtime_cfg.get("pose", {})
     ik_cfg = realtime_cfg.get("ik", {})
     visualizer_cfg = realtime_cfg.get("visualizer", {})
     recorder_cfg = realtime_cfg.get("recorder", {})
@@ -163,6 +174,30 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
     calib_file = realtime_cfg.get("calib_file") or _discover_calibration_file(project_dir)
     recorder_output_dir = recorder_cfg.get("output_dir") or _default_output_dir(project_dir)
 
+    rt_pose = RealtimePoseConfig(
+        mode=rt_pose_cfg.get("mode", "lightweight"),
+        det_frequency=int(rt_pose_cfg.get("det_frequency", 10)),
+        backend=rt_pose_cfg.get("backend") or None,
+        device=rt_pose_cfg.get("device") or None,
+        parallel=bool(rt_pose_cfg.get("parallel", True)),
+    )
+
+    # Inject resolved realtime.pose defaults into raw_config so that
+    # downstream consumers (e.g. RealtimePoseEstimator) see them even when
+    # the user did not explicitly write a [realtime.pose] section.
+    enriched_config: Dict[str, Any] = dict(config_dict)
+    enriched_rt: Dict[str, Any] = dict(enriched_config.get("realtime", {}))
+    enriched_rt_pose: Dict[str, Any] = dict(enriched_rt.get("pose", {}))
+    enriched_rt_pose.setdefault("mode", rt_pose.mode)
+    enriched_rt_pose.setdefault("det_frequency", rt_pose.det_frequency)
+    if rt_pose.backend:
+        enriched_rt_pose.setdefault("backend", rt_pose.backend)
+    if rt_pose.device:
+        enriched_rt_pose.setdefault("device", rt_pose.device)
+    enriched_rt_pose.setdefault("parallel", rt_pose.parallel)
+    enriched_rt["pose"] = enriched_rt_pose
+    enriched_config["realtime"] = enriched_rt
+
     return RealtimeConfig(
         project_dir=project_dir,
         calib_file=calib_file,
@@ -175,6 +210,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
             frame_offsets=frame_offsets,
             stop_on_shortest=bool(capture_cfg.get("stop_on_shortest", True)),
         ),
+        pose=rt_pose,
         ik=RealtimeIKConfig(
             enabled=bool(ik_cfg.get("enabled", True)),
             window_size=int(ik_cfg.get("window_size", 10)),
@@ -196,5 +232,5 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
             record_mot=bool(recorder_cfg.get("record_mot", False)),
             output_dir=recorder_output_dir,
         ),
-        raw_config=config_dict,
+        raw_config=enriched_config,
     )

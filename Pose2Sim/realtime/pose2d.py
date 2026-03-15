@@ -8,7 +8,8 @@ Frame-oriented 2D pose estimation for the realtime pipeline.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Sequence, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from anytree import RenderTree
@@ -25,22 +26,28 @@ class RealtimePoseEstimator:
 
     Each camera gets its own PoseTracker instance and tracking state. When
     multiple people are detected, the first tracker-sorted person is retained.
+
+    Realtime-specific overrides (mode, det_frequency) can be supplied via the
+    ``realtime.pose`` section of the config dict to use lighter models or less
+    frequent detection without affecting the offline pipeline settings.
     """
 
     def __init__(
         self,
         config_dict,
         camera_ids: Sequence[str],
+        parallel: bool = True,
     ):
         pose_cfg = config_dict.get("pose", {})
+        rt_pose_cfg = config_dict.get("realtime", {}).get("pose", {})
 
         self.pose_model_name = pose_cfg.get("pose_model", "Body_with_feet")
         self.tracking_mode = str(pose_cfg.get("tracking_mode", "sports2d")).lower()
         self.max_distance_px = float(pose_cfg.get("max_distance_px", 100))
-        self.backend = pose_cfg.get("backend", "auto")
-        self.device = pose_cfg.get("device", "auto")
-        self.det_frequency = int(pose_cfg.get("det_frequency", 1))
-        self.mode = pose_cfg.get("mode", "balanced")
+        self.backend = rt_pose_cfg.get("backend", pose_cfg.get("backend", "auto"))
+        self.device = rt_pose_cfg.get("device", pose_cfg.get("device", "auto"))
+        self.det_frequency = int(rt_pose_cfg.get("det_frequency", pose_cfg.get("det_frequency", 1)))
+        self.mode = rt_pose_cfg.get("mode", pose_cfg.get("mode", "balanced"))
 
         self.pose_model, model_class, resolved_mode = setup_model_class_mode(
             self.pose_model_name,
@@ -83,6 +90,20 @@ class RealtimePoseEstimator:
                 selected_device,
             )
         self._prev_keypoints: Dict[str, np.ndarray] = {}
+
+        self._parallel = parallel and len(camera_ids) > 1
+        self._thread_pool: Optional[ThreadPoolExecutor] = None
+        if self._parallel:
+            self._thread_pool = ThreadPoolExecutor(
+                max_workers=len(camera_ids),
+                thread_name_prefix="pose2d",
+            )
+
+    def shutdown(self) -> None:
+        """Release the thread pool used for parallel multi-camera inference."""
+        if self._thread_pool is not None:
+            self._thread_pool.shutdown(wait=False)
+            self._thread_pool = None
 
     def _build_fallback_candidates(self) -> List[Tuple[str, str]]:
         fallback_candidates = [
@@ -155,6 +176,9 @@ class RealtimePoseEstimator:
         )
 
     def infer_batch(self, frame_packets: Sequence[FramePacket]) -> List[Pose2DPacket]:
+        if self._thread_pool is not None and len(frame_packets) > 1:
+            futures = [self._thread_pool.submit(self.infer, pkt) for pkt in frame_packets]
+            return [f.result() for f in futures]
         return [self.infer(packet) for packet in frame_packets]
 
     @property
