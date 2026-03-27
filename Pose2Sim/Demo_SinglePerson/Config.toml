@@ -228,7 +228,7 @@ make_c3d = true # also save triangulated data in c3d format
    # Used in countless applications, especially real-time. This one is a simplified Kalman filter 
    [filtering.kalman]
    # How much more do you trust triangulation results (measurements), than the assumption of constant acceleration(process)?
-   trust_ratio = 500 # = measurement_trust/process_trust ~= process_noise/measurement_noise
+   trust_ratio = 5 # = measurement_trust/process_trust ~= process_noise/measurement_noise
    smooth = true # should be true, unless you need real-time filtering
 
    # Simpler and even faster alternative to Kalman filter for real-time but tends to blunt RoM. Similar to a 1st order Butterworth but with adaptive cut-off frequency. This one is zero-phase
@@ -364,9 +364,29 @@ id = 19
 
 
 [realtime.pose]
-mode = 'lightweight'  # Override for realtime: 'lightweight' (faster, recommended), 'balanced', or 'performance'
-det_frequency = 10    # Run detection every N frames during realtime (higher = faster for single-person)
+mode = 'balanced'  # Override for realtime: 'lightweight' (faster, recommended), 'balanced', or 'performance'
+det_frequency = 1    # Run detection every N frames during realtime (higher = faster for single-person)
 parallel = true       # Run multi-camera 2D inference in parallel threads
+
+[realtime.filtering]
+type = 'one_euro'  # 'kalman', 'one_euro', 'butterworth', 'kalman_rts', or 'none'
+
+   [realtime.filtering.kalman]
+   trust_ratio = 5  # Lower = smoother but more lag. Recommended range: 2~10 for realtime causal filtering.
+
+   [realtime.filtering.one_euro]
+   cut_off_frequency = 1.0  # Hz # Min cutoff for slow movements. Lower = smoother. Recommended: 2~6.
+   beta = 1.5                # Cutoff adaptation to velocity: cutoff = cut_off_frequency + beta * velocity
+   d_cut_off_frequency = 1.0 # Hz # Cutoff for derivative smoothing. Usually keep at 1.0.
+
+   [realtime.filtering.butterworth]
+   order = 4              # Filter order (effective order doubled by bidirectional pass)
+   cut_off_frequency = 6  # Hz # Same as offline default. Lower = smoother.
+   window_size = 30       # Sliding window length in frames. Middle frame is emitted (latency = window_size/2).
+
+   [realtime.filtering.kalman_rts]
+   trust_ratio = 5   # Same as causal Kalman. Lower = smoother.
+   window_size = 20   # Forward Kalman + backward RTS on this window. Middle frame is emitted (latency = window_size/2).
 
 [realtime.ik]
 use_simple_model = true

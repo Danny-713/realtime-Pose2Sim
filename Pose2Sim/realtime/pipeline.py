@@ -119,8 +119,12 @@ class RealtimePipeline:
 
         if self.pose3d_filter is not None:
             t0 = time.perf_counter()
-            pose3d_packet = self.pose3d_filter.update(pose3d_packet)
+            filtered = self.pose3d_filter.update(pose3d_packet)
             step_metrics["filter_ms"] = (time.perf_counter() - t0) * 1000.0
+            if filtered is None:
+                self.last_step_metrics = step_metrics
+                return None
+            pose3d_packet = filtered
 
         markers_3d = np.asarray(pose3d_packet.markers_3d, dtype=float)
         if markers_3d.ndim == 2 and markers_3d.shape[1] == 3:

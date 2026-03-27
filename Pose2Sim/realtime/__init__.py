@@ -20,7 +20,10 @@ those runtime modules.
 from Pose2Sim.realtime.capture import FrameSource, ReplayFrameSource, VideoReplayFrameSource
 from Pose2Sim.realtime.filter_realtime import (
     PassThroughFilter,
+    RealtimeButterworthWindowFilter,
     RealtimeKalmanFilter,
+    RealtimeKalmanRTSWindowFilter,
+    RealtimeOneEuroFilter,
     RealtimePoseFilter,
 )
 from Pose2Sim.realtime.marker_buffer import SlidingMarkerBuffer
@@ -51,11 +54,15 @@ __all__ = [
     "Pose2DPacket",
     "Pose3DPacket",
     "PassThroughFilter",
+    "RealtimeButterworthWindowFilter",
     "RealtimeCaptureConfig",
     "RealtimeConfig",
     "RealtimeFrameTriangulator",
     "RealtimeIKConfig",
+    "RealtimeFilteringConfig",
     "RealtimeKalmanFilter",
+    "RealtimeKalmanRTSWindowFilter",
+    "RealtimeOneEuroFilter",
     "RealtimePipeline",
     "RealtimePoseConfig",
     "RealtimePoseEstimator",
@@ -73,6 +80,7 @@ def __getattr__(name):
     _config_names = {
         "RealtimeCaptureConfig",
         "RealtimeConfig",
+        "RealtimeFilteringConfig",
         "RealtimeIKConfig",
         "RealtimePoseConfig",
         "RealtimeRecorderConfig",

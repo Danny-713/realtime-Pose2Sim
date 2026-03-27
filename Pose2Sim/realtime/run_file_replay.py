@@ -49,8 +49,14 @@ RUNTIME_DIR = apply_runtime_preflight()
 from Pose2Sim.common import natural_sort_key
 from Pose2Sim.kinematics import get_model_path, get_opensim_setup_dir
 from Pose2Sim.realtime.capture import VideoReplayFrameSource
-from Pose2Sim.realtime.config import load_realtime_config
-from Pose2Sim.realtime.filter_realtime import PassThroughFilter, RealtimeKalmanFilter
+from Pose2Sim.realtime.config import RealtimeFilteringConfig, load_realtime_config
+from Pose2Sim.realtime.filter_realtime import (
+    PassThroughFilter,
+    RealtimeButterworthWindowFilter,
+    RealtimeKalmanFilter,
+    RealtimeKalmanRTSWindowFilter,
+    RealtimeOneEuroFilter,
+)
 from Pose2Sim.realtime.marker_buffer import SlidingMarkerBuffer
 from Pose2Sim.realtime.opensim_ik import RealtimeIKSolver
 from Pose2Sim.realtime.opensim_viz import OpenSimVisualizer
@@ -143,14 +149,45 @@ def detect_frame_rate(sources: tuple[str, ...], configured_frame_rate: float) ->
     return float(fps) if fps and fps > 0 else 30.0
 
 
-def build_pose_filter(config_dict, frame_rate: float):
-    filtering_cfg = config_dict.get("filtering", {})
-    if not bool(filtering_cfg.get("filter", True)):
+def build_pose_filter(filter_cfg: RealtimeFilteringConfig, frame_rate: float):
+    filter_type = filter_cfg.type
+
+    if filter_type == "none":
         return PassThroughFilter()
 
-    kalman_cfg = filtering_cfg.get("kalman", {})
-    trust_ratio = float(kalman_cfg.get("trust_ratio", 500))
-    return RealtimeKalmanFilter(frame_rate=frame_rate, trust_ratio=trust_ratio)
+    if filter_type == "kalman":
+        return RealtimeKalmanFilter(
+            frame_rate=frame_rate,
+            trust_ratio=filter_cfg.kalman_trust_ratio,
+        )
+
+    if filter_type == "one_euro":
+        return RealtimeOneEuroFilter(
+            frame_rate=frame_rate,
+            min_cutoff=filter_cfg.one_euro_min_cutoff,
+            beta=filter_cfg.one_euro_beta,
+            d_cutoff=filter_cfg.one_euro_d_cutoff,
+        )
+
+    if filter_type == "butterworth":
+        return RealtimeButterworthWindowFilter(
+            frame_rate=frame_rate,
+            order=filter_cfg.butterworth_order,
+            cutoff=filter_cfg.butterworth_cutoff,
+            window_size=filter_cfg.butterworth_window_size,
+        )
+
+    if filter_type == "kalman_rts":
+        return RealtimeKalmanRTSWindowFilter(
+            frame_rate=frame_rate,
+            trust_ratio=filter_cfg.kalman_rts_trust_ratio,
+            window_size=filter_cfg.kalman_rts_window_size,
+        )
+
+    raise ValueError(
+        f"Unknown realtime filter type {filter_type!r}. "
+        "Supported types: 'kalman', 'one_euro', 'butterworth', 'kalman_rts', 'none'."
+    )
 
 
 def _mean_or_nan(values: list[float]) -> float:
@@ -219,7 +256,8 @@ def main() -> None:
         camera_ids=realtime_config.capture.camera_ids,
         marker_names=pose2d_estimator.keypoint_names,
     )
-    pose_filter = build_pose_filter(realtime_config.raw_config, frame_rate)
+    pose_filter = build_pose_filter(realtime_config.filtering, frame_rate)
+    logging.info("  rt_filter_type=%s", realtime_config.filtering.type)
     marker_buffer = SlidingMarkerBuffer(
         window_size=realtime_config.ik.window_size,
         expected_marker_names=pose2d_estimator.keypoint_names,

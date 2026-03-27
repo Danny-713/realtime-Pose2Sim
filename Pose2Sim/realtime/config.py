@@ -61,12 +61,27 @@ class RealtimeRecorderConfig:
 
 
 @dataclass(frozen=True)
+class RealtimeFilteringConfig:
+    type: str = "one_euro"
+    kalman_trust_ratio: float = 5.0
+    one_euro_min_cutoff: float = 4.0
+    one_euro_beta: float = 1.5
+    one_euro_d_cutoff: float = 1.0
+    butterworth_order: int = 4
+    butterworth_cutoff: float = 6.0
+    butterworth_window_size: int = 30
+    kalman_rts_trust_ratio: float = 5.0
+    kalman_rts_window_size: int = 20
+
+
+@dataclass(frozen=True)
 class RealtimeConfig:
     project_dir: str
     calib_file: Optional[str]
     pose_model: str
     capture: RealtimeCaptureConfig
     pose: RealtimePoseConfig
+    filtering: RealtimeFilteringConfig
     ik: RealtimeIKConfig
     visualizer: RealtimeVisualizerConfig
     recorder: RealtimeRecorderConfig
@@ -147,6 +162,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
 
     capture_cfg = realtime_cfg.get("capture", {})
     rt_pose_cfg = realtime_cfg.get("pose", {})
+    filtering_cfg = realtime_cfg.get("filtering", {})
     ik_cfg = realtime_cfg.get("ik", {})
     visualizer_cfg = realtime_cfg.get("visualizer", {})
     recorder_cfg = realtime_cfg.get("recorder", {})
@@ -198,6 +214,24 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
     enriched_rt["pose"] = enriched_rt_pose
     enriched_config["realtime"] = enriched_rt
 
+    # Build filtering config from [realtime.filtering] with per-type sub-tables.
+    rt_filtering_kalman = filtering_cfg.get("kalman", {})
+    rt_filtering_one_euro = filtering_cfg.get("one_euro", {})
+    rt_filtering_butterworth = filtering_cfg.get("butterworth", {})
+    rt_filtering_kalman_rts = filtering_cfg.get("kalman_rts", {})
+    rt_filtering = RealtimeFilteringConfig(
+        type=str(filtering_cfg.get("type", "one_euro")).lower(),
+        kalman_trust_ratio=float(rt_filtering_kalman.get("trust_ratio", 5.0)),
+        one_euro_min_cutoff=float(rt_filtering_one_euro.get("cut_off_frequency", 4.0)),
+        one_euro_beta=float(rt_filtering_one_euro.get("beta", 1.5)),
+        one_euro_d_cutoff=float(rt_filtering_one_euro.get("d_cut_off_frequency", 1.0)),
+        butterworth_order=int(rt_filtering_butterworth.get("order", 4)),
+        butterworth_cutoff=float(rt_filtering_butterworth.get("cut_off_frequency", 6.0)),
+        butterworth_window_size=int(rt_filtering_butterworth.get("window_size", 30)),
+        kalman_rts_trust_ratio=float(rt_filtering_kalman_rts.get("trust_ratio", 5.0)),
+        kalman_rts_window_size=int(rt_filtering_kalman_rts.get("window_size", 20)),
+    )
+
     return RealtimeConfig(
         project_dir=project_dir,
         calib_file=calib_file,
@@ -211,6 +245,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
             stop_on_shortest=bool(capture_cfg.get("stop_on_shortest", True)),
         ),
         pose=rt_pose,
+        filtering=rt_filtering,
         ik=RealtimeIKConfig(
             enabled=bool(ik_cfg.get("enabled", True)),
             window_size=int(ik_cfg.get("window_size", 10)),

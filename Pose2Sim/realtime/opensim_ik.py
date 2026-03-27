@@ -72,7 +72,7 @@ def _build_markers_reference(
         return osim.MarkersReference(table, weights, osim.Units(osim.Units.Meters))
 
 
-def _build_solver(
+def _build_solver(#ik调用
     model: osim.Model,
     markers_ref: osim.MarkersReference,
 ) -> osim.InverseKinematicsSolver:

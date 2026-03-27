@@ -16,7 +16,7 @@ from Pose2Sim.realtime.packets import MultiViewPosePacket, Pose3DPacket
 
 
 @runtime_checkable
-class FrameTriangulator(Protocol):
+class FrameTriangulator(Protocol):#协议，定义了triangulate方法
     """
     Realtime triangulator contract: one multi-view packet in, one 3D packet out.
     """
@@ -27,13 +27,13 @@ class FrameTriangulator(Protocol):
         """
 
 
-class CallableFrameTriangulator:
+class CallableFrameTriangulator:#适配器，本身什么都没有做，为了适配协议
     """
     Thin adapter around a plain callable.
     """
 
-    def __init__(self, triangulate_fn: Callable[[MultiViewPosePacket], Pose3DPacket]):
-        self._triangulate_fn = triangulate_fn
+    def __init__(self, triangulate_fn: Callable[[MultiViewPosePacket], Pose3DPacket]):#类型注释callable，输入：triangulate函数，函数也是类
+        self._triangulate_fn = triangulate_fn#把函数存起来，相当于一个属性
 
     def triangulate(self, packet: MultiViewPosePacket) -> Pose3DPacket:
         return self._triangulate_fn(packet)
@@ -82,7 +82,7 @@ class RealtimeFrameTriangulator:
         self._triangulation_from_best_cameras = triangulation_from_best_cameras
 
     @staticmethod
-    def _zup_to_yup(markers_3d: np.ndarray) -> np.ndarray:
+    def _zup_to_yup(markers_3d: np.ndarray) -> np.ndarray:#坐标轴转换，Z-up to Y-up
         """
         Match the offline TRC export convention before handing markers to OpenSim.
 
@@ -99,7 +99,7 @@ class RealtimeFrameTriangulator:
             )
         return markers_3d[:, [1, 2, 0]]
 
-    def _resolve_camera_order(self, runtime_camera_ids: Sequence[str]) -> tuple[str, ...]:
+    def _resolve_camera_order(self, runtime_camera_ids: Sequence[str]) -> tuple[str, ...]:#相机顺序解析
         runtime_ids = {str(camera_id).lower(): str(camera_id) for camera_id in runtime_camera_ids}
         resolved = []
         for calib_id in self.calib_camera_ids:
@@ -112,7 +112,7 @@ class RealtimeFrameTriangulator:
         return tuple(resolved)
 
     @staticmethod
-    def _build_swap_indices(marker_names: Sequence[str]) -> tuple[int, ...]:
+    def _build_swap_indices(marker_names: Sequence[str]) -> tuple[int, ...]:#左右手交换索引构建
         index_by_name = {name: idx for idx, name in enumerate(marker_names)}
         swap_indices = []
         for name in marker_names:
@@ -124,7 +124,7 @@ class RealtimeFrameTriangulator:
                 swap_indices.append(index_by_name[name])
         return tuple(swap_indices)
 
-    def triangulate(self, packet: MultiViewPosePacket) -> Pose3DPacket:
+    def triangulate(self, packet: MultiViewPosePacket) -> Pose3DPacket:#三角化，调用离线版的三角化函数
         marker_positions = []
         reprojection_errors = []
         excluded_camera_counts = []
