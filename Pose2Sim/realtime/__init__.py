@@ -23,6 +23,7 @@ from Pose2Sim.realtime.capture import (
     ReplayFrameSource,
     VideoReplayFrameSource,
 )
+from Pose2Sim.realtime.augmentation import RealtimeMarkerAugmenter
 from Pose2Sim.realtime.filter_realtime import (
     PassThroughFilter,
     RealtimeButterworthWindowFilter,
@@ -55,6 +56,8 @@ __all__ = [
     "FrameTriangulator",
     "LiveCameraFrameSource",
     "MarkerWindow",
+    "RealtimeAugmentationConfig",
+    "RealtimeMarkerAugmenter",
     "MultiViewPosePacket",
     "OpenSimStatePacket",
     "Pose2DPacket",
@@ -88,6 +91,7 @@ def __getattr__(name):
         "RealtimeConfig",
         "RealtimeFilteringConfig",
         "RealtimeIKConfig",
+        "RealtimeAugmentationConfig",
         "RealtimePoseConfig",
         "RealtimeRecorderConfig",
         "RealtimeVisualizerConfig",

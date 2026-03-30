@@ -14,7 +14,6 @@ Current V1 scope is intentionally narrow:
 Out of scope for this stage:
 
 - automatic synchronization
-- marker augmentation
 - OpenSim GUI integration
 - server-to-client transport
 - multi-person association
@@ -64,6 +63,11 @@ The current V1 replay path is:
 
 `videos/*.mp4 -> pose2d -> single-person multiview packet -> per-frame triangulation -> causal realtime filter -> sliding marker window -> realtime IK -> OpenSimStatePacket -> visualizer/recorder`
 
+When `realtime.augmentation.enabled = true`, the pipeline inserts a fixed-lag
+LSTM augmenter between filtering and the IK buffer:
+
+`videos/*.mp4 -> pose2d -> multiview packet -> triangulation -> causal realtime filter -> marker augmentation -> sliding marker window -> realtime IK`
+
 The live capture path keeps the same downstream stack and only swaps the frame
 source:
 
@@ -78,6 +82,7 @@ The main runtime modules are:
 - `pose2d.py`: single-person per-camera 2D estimation
 - `triangulate_frame.py`: per-frame 3D triangulation
 - `filter_realtime.py`: causal realtime filters
+- `augmentation.py`: optional fixed-lag LSTM marker augmentation
 - `marker_buffer.py`: sliding window for small-window IK
 - `opensim_ik.py`: rolling-window OpenSim IK
 - `opensim_viz.py`: API Visualizer backend
@@ -98,12 +103,40 @@ Support modules:
   - otherwise, if `realtime.ik.use_simple_model=true`, use the simple setup model
   - otherwise fall back to an existing `project_dir/kinematics/*.osim`
 - The current V1 baseline is the simple model path; trial/complex models are kept as explicit comparison paths.
+- When realtime augmentation is enabled, the body model remains the current simple `.osim`, but the IK marker set automatically switches from `HALPE_26` to `LSTM`.
 - `playback_fps <= 0` means full-speed replay; no artificial slow-down is added.
 - For live capture, `playback_fps <= 0` means process frames as fast as the pipeline can consume them.
 - `--record-mot` forces coordinate recording and writes `realtime.mot`.
 - Recorder outputs go to `project_dir/realtime_output/` by default.
-- The runner prints a stage summary with capture, pose2d, triangulate, filter, and ik average timings.
+- The runner prints a stage summary with capture, pose2d, triangulate, filter, augmentation, and ik average timings.
 - The runner also reports average valid 3D markers, average markers used by IK, and average reprojection error.
+
+## Realtime augmentation config
+
+Realtime marker augmentation is optional and disabled by default. The current
+implementation only supports the default `Body_with_feet / HALPE_26` route and
+reuses the offline LSTM augmenter assets.
+
+Example:
+
+```toml
+[realtime.augmentation]
+enabled = true
+model_name = "LSTM"
+model_version = "v0.3"
+window_size = 15
+min_window_size = 15
+output_mode = "center"
+feet_on_floor = false
+use_subject_stats = true
+```
+
+Notes:
+
+- `output_mode = "center"` is the default and adds fixed delay to improve stability.
+- Height is reused from `project.participant_height` when numeric.
+- If height is `auto`, realtime estimates it once from the first valid augmentation window and then keeps it fixed.
+- The augmented packet keeps the original 3D keypoints and appends the LSTM response markers before IK.
 
 ## Stage-0 regression scripts
 

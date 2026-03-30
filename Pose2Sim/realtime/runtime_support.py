@@ -52,6 +52,7 @@ RUNTIME_DIR = apply_runtime_preflight()
 
 from Pose2Sim.common import natural_sort_key
 from Pose2Sim.kinematics import get_model_path, get_opensim_setup_dir
+from Pose2Sim.realtime.augmentation import RealtimeMarkerAugmenter
 from Pose2Sim.realtime.config import RealtimeConfig, RealtimeFilteringConfig
 from Pose2Sim.realtime.filter_realtime import (
     PassThroughFilter,
@@ -183,16 +184,38 @@ def build_runtime_pipeline(
     pose_filter = build_pose_filter(realtime_config.filtering, frame_rate)
     marker_buffer = SlidingMarkerBuffer(
         window_size=realtime_config.ik.window_size,
-        expected_marker_names=pose2d_estimator.keypoint_names,
+        expected_marker_names=None,
     )
+
+    marker_augmenter = None
+    if realtime_config.augmentation.enabled:
+        marker_augmenter = RealtimeMarkerAugmenter(
+            config_dict=realtime_config.raw_config,
+            pose_model=realtime_config.pose_model,
+            raw_marker_names=pose2d_estimator.keypoint_names,
+            model_name=realtime_config.augmentation.model_name,
+            model_version=realtime_config.augmentation.model_version,
+            window_size=realtime_config.augmentation.window_size,
+            min_window_size=realtime_config.augmentation.min_window_size,
+            output_mode=realtime_config.augmentation.output_mode,
+            feet_on_floor=realtime_config.augmentation.feet_on_floor,
+            use_subject_stats=realtime_config.augmentation.use_subject_stats,
+        )
+        marker_buffer.expected_marker_names = marker_augmenter.output_marker_names
+    else:
+        marker_buffer.expected_marker_names = pose2d_estimator.keypoint_names
 
     ik_solver = None
     if realtime_config.ik.enabled:
+        marker_set_name = realtime_config.ik.marker_set_name
+        if realtime_config.augmentation.enabled and not marker_set_name:
+            marker_set_name = "LSTM"
         ik_solver = RealtimeIKSolver(
             model_path=model_path,
             pose_model=realtime_config.pose_model,
             osim_setup_dir=osim_setup_dir,
             warm_start=realtime_config.ik.warm_start,
+            marker_set_name=marker_set_name,
         )
 
     visualizer = None
@@ -214,6 +237,7 @@ def build_runtime_pipeline(
         triangulator=triangulator,
         marker_buffer=marker_buffer,
         pose3d_filter=pose_filter,
+        marker_augmenter=marker_augmenter,
         ik_solver=ik_solver,
         visualizer=visualizer,
         recorder=recorder,
@@ -223,6 +247,7 @@ def build_runtime_pipeline(
         "pose2d_estimator": pose2d_estimator,
         "triangulator": triangulator,
         "pose_filter": pose_filter,
+        "marker_augmenter": marker_augmenter,
         "marker_buffer": marker_buffer,
         "ik_solver": ik_solver,
         "visualizer": visualizer,
@@ -256,11 +281,26 @@ def log_runtime_configuration(
         realtime_config.pose.parallel,
     )
     logging.info("  rt_filter_type=%s", realtime_config.filtering.type)
+    logging.info(
+        "  rt_augmentation_enabled=%s  model=%s  version=%s  window=%d  output_mode=%s",
+        realtime_config.augmentation.enabled,
+        realtime_config.augmentation.model_name,
+        realtime_config.augmentation.model_version,
+        realtime_config.augmentation.window_size,
+        realtime_config.augmentation.output_mode,
+    )
 
 
 def log_pipeline_components(details: dict[str, Any]) -> None:
     pose2d_estimator = details["pose2d_estimator"]
     logging.info("  runtime_pose_backends=%s", pose2d_estimator.runtime_choices)
+    marker_augmenter = details.get("marker_augmenter")
+    if marker_augmenter is not None:
+        logging.info(
+            "  augmentation_output_markers=%d  response_markers=%d",
+            len(marker_augmenter.output_marker_names or ()),
+            len(marker_augmenter.response_marker_names),
+        )
 
 
 def _mean_or_nan(values: list[float]) -> float:
@@ -285,6 +325,7 @@ def run_pipeline_loop(
     pose2d_times_ms: list[float] = []
     triangulate_times_ms: list[float] = []
     filter_times_ms: list[float] = []
+    augmentation_times_ms: list[float] = []
     ik_times_ms: list[float] = []
     valid_markers: list[int] = []
     reprojection_errors: list[float] = []
@@ -307,6 +348,7 @@ def run_pipeline_loop(
             pose2d_times_ms.append(float(step_metrics.get("pose2d_ms", 0.0)))
             triangulate_times_ms.append(float(step_metrics.get("triangulate_ms", 0.0)))
             filter_times_ms.append(float(step_metrics.get("filter_ms", 0.0)))
+            augmentation_times_ms.append(float(step_metrics.get("augmentation_ms", 0.0)))
             valid_markers.append(int(step_metrics.get("valid_markers", 0)))
             reproj = step_metrics.get("reprojection_error", float("nan"))
             if reproj is not None:
@@ -332,6 +374,7 @@ def run_pipeline_loop(
         "pose2d_avg_ms": _mean_or_nan(pose2d_times_ms),
         "triangulate_avg_ms": _mean_or_nan(triangulate_times_ms),
         "filter_avg_ms": _mean_or_nan(filter_times_ms),
+        "augmentation_avg_ms": _mean_or_nan(augmentation_times_ms),
         "ik_avg_ms": _mean_or_nan(ik_times_ms),
         "avg_valid_markers": _int_mean_or_zero(valid_markers),
         "avg_num_markers_in_use": _int_mean_or_zero(markers_in_use),
@@ -349,6 +392,7 @@ def log_pipeline_summary(summary: dict[str, float | int], *, finish_label: str) 
     logging.info("  pose2d_avg_ms=%.2f", float(summary["pose2d_avg_ms"]))
     logging.info("  triangulate_avg_ms=%.2f", float(summary["triangulate_avg_ms"]))
     logging.info("  filter_avg_ms=%.2f", float(summary["filter_avg_ms"]))
+    logging.info("  augmentation_avg_ms=%.2f", float(summary["augmentation_avg_ms"]))
     logging.info("  ik_avg_ms=%.2f", float(summary["ik_avg_ms"]))
     logging.info("Realtime data summary")
     logging.info("  avg_valid_markers=%.2f", float(summary["avg_valid_markers"]))

@@ -37,10 +37,16 @@ def _normalize_pose_model_name(pose_model: str) -> str:
     return pose_model
 
 
-def _apply_pose_model_markers(model: osim.Model, pose_model: str, osim_setup_dir: Path) -> None:
+def _apply_pose_model_markers(
+    model: osim.Model,
+    pose_model: str,
+    osim_setup_dir: Path,
+    marker_set_name: str | None = None,
+) -> None:
     from Pose2Sim.kinematics import get_markers_path
 
-    markers_path = get_markers_path(_normalize_pose_model_name(pose_model), osim_setup_dir)
+    resolved_name = marker_set_name or _normalize_pose_model_name(pose_model)
+    markers_path = get_markers_path(resolved_name, osim_setup_dir)
     marker_set = osim.MarkerSet(str(markers_path))
     model.set_MarkerSet(marker_set)
 
@@ -130,19 +136,26 @@ class RealtimeIKSolver:
         osim_setup_dir: Path,
         warm_start: bool = True,
         accuracy: float = 1e-3,
+        marker_set_name: str | None = None,
     ):
         self.model_path = str(Path(model_path).resolve())
         self.pose_model = pose_model
         self.osim_setup_dir = Path(osim_setup_dir).resolve()
         self.warm_start = bool(warm_start)
         self.accuracy = float(accuracy)
+        self.marker_set_name = marker_set_name
 
         geometry_dir = self.osim_setup_dir / "Geometry"
         if geometry_dir.exists():
             osim.ModelVisualizer.addDirToGeometrySearchPaths(str(geometry_dir))
 
         self.model = osim.Model(self.model_path)
-        _apply_pose_model_markers(self.model, self.pose_model, self.osim_setup_dir)
+        _apply_pose_model_markers(
+            self.model,
+            self.pose_model,
+            self.osim_setup_dir,
+            marker_set_name=self.marker_set_name,
+        )
         self._model_marker_names = {
             self.model.getMarkerSet().get(index).getName()
             for index in range(self.model.getMarkerSet().getSize())
@@ -150,9 +163,10 @@ class RealtimeIKSolver:
         self._state = self.model.initSystem()
         self._initialized = False
         logging.info(
-            "RealtimeIKSolver ready: model=%s pose_model=%s marker_count=%d warm_start=%s",
+            "RealtimeIKSolver ready: model=%s pose_model=%s marker_set=%s marker_count=%d warm_start=%s",
             self.model_path,
             self.pose_model,
+            self.marker_set_name or _normalize_pose_model_name(self.pose_model),
             len(self._model_marker_names),
             self.warm_start,
         )
@@ -198,6 +212,7 @@ class RealtimeIKSolver:
             "ik_status": "solved",
             "num_markers_in_use": int(solver.getNumMarkersInUse()),
             "marker_columns": filtered_names,
+            "marker_set_name": self.marker_set_name or _normalize_pose_model_name(self.pose_model),
         }
         if filtered_names and hasattr(solver, "computeCurrentMarkerError"):
             try:

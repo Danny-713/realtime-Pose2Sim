@@ -364,12 +364,12 @@ id = 19
 
 
 [realtime.pose]
-mode = 'balanced'  # Override for realtime: 'lightweight' (faster, recommended), 'balanced', or 'performance'
-det_frequency = 1    # Run detection every N frames during realtime (higher = faster for single-person)
+mode = 'lightweight'  # Override for realtime: 'lightweight' (faster, recommended), 'balanced', or 'performance'
+det_frequency = 4    # Run detection every N frames during realtime (higher = faster for single-person)
 parallel = true       # Run multi-camera 2D inference in parallel threads
 
 [realtime.filtering]
-type = 'one_euro'  # 'kalman', 'one_euro', 'butterworth', 'kalman_rts', or 'none'
+type = 'butterworth'  # 'kalman', 'one_euro', 'butterworth', 'kalman_rts', or 'none'
 
    [realtime.filtering.kalman]
    trust_ratio = 5  # Lower = smoother but more lag. Recommended range: 2~10 for realtime causal filtering.
@@ -387,6 +387,16 @@ type = 'one_euro'  # 'kalman', 'one_euro', 'butterworth', 'kalman_rts', or 'none
    [realtime.filtering.kalman_rts]
    trust_ratio = 5   # Same as causal Kalman. Lower = smoother.
    window_size = 20   # Forward Kalman + backward RTS on this window. Middle frame is emitted (latency = window_size/2).
+
+[realtime.augmentation]
+enabled = true        # Toggle realtime marker augmentation on/off for A/B comparison.
+model_name = 'LSTM'    # Current realtime implementation only supports the offline LSTM augmenter assets.
+model_version = 'v0.3'
+window_size = 15       # Realtime augmentation window length. Center frame is emitted by default.
+min_window_size = 15
+output_mode = 'center' # 'center' = fixed-lag and steadier; 'latest' = lower lag but less smoothing.
+feet_on_floor = false  # Match offline augmenter option. Usually keep false for realtime tests.
+use_subject_stats = true  # Reuse participant height/mass if available; falls back safely if auto height fails.
 
 [realtime.ik]
 use_simple_model = true

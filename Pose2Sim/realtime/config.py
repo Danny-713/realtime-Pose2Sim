@@ -44,6 +44,18 @@ class RealtimeIKConfig:
 
 
 @dataclass(frozen=True)
+class RealtimeAugmentationConfig:
+    enabled: bool = False
+    model_name: str = "LSTM"
+    model_version: str = "v0.3"
+    window_size: int = 15
+    min_window_size: int = 15
+    output_mode: str = "center"
+    feet_on_floor: bool = False
+    use_subject_stats: bool = True
+
+
+@dataclass(frozen=True)
 class RealtimeVisualizerConfig:
     enabled: bool = True
     playback_fps: float = 0.0
@@ -88,6 +100,7 @@ class RealtimeConfig:
     capture: RealtimeCaptureConfig
     pose: RealtimePoseConfig
     filtering: RealtimeFilteringConfig
+    augmentation: RealtimeAugmentationConfig
     ik: RealtimeIKConfig
     visualizer: RealtimeVisualizerConfig
     recorder: RealtimeRecorderConfig
@@ -169,6 +182,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
     capture_cfg = realtime_cfg.get("capture", {})
     rt_pose_cfg = realtime_cfg.get("pose", {})
     filtering_cfg = realtime_cfg.get("filtering", {})
+    augmentation_cfg = realtime_cfg.get("augmentation", {})
     ik_cfg = realtime_cfg.get("ik", {})
     visualizer_cfg = realtime_cfg.get("visualizer", {})
     recorder_cfg = realtime_cfg.get("recorder", {})
@@ -223,6 +237,27 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
         enriched_rt_pose.setdefault("device", rt_pose.device)
     enriched_rt_pose.setdefault("parallel", rt_pose.parallel)
     enriched_rt["pose"] = enriched_rt_pose
+
+    rt_augmentation = RealtimeAugmentationConfig(
+        enabled=bool(augmentation_cfg.get("enabled", False)),
+        model_name=str(augmentation_cfg.get("model_name", "LSTM")),
+        model_version=str(augmentation_cfg.get("model_version", "v0.3")),
+        window_size=int(augmentation_cfg.get("window_size", 15)),
+        min_window_size=int(augmentation_cfg.get("min_window_size", 15)),
+        output_mode=str(augmentation_cfg.get("output_mode", "center")).lower(),
+        feet_on_floor=bool(augmentation_cfg.get("feet_on_floor", False)),
+        use_subject_stats=bool(augmentation_cfg.get("use_subject_stats", True)),
+    )
+    enriched_rt_augmentation: Dict[str, Any] = dict(enriched_rt.get("augmentation", {}))
+    enriched_rt_augmentation.setdefault("enabled", rt_augmentation.enabled)
+    enriched_rt_augmentation.setdefault("model_name", rt_augmentation.model_name)
+    enriched_rt_augmentation.setdefault("model_version", rt_augmentation.model_version)
+    enriched_rt_augmentation.setdefault("window_size", rt_augmentation.window_size)
+    enriched_rt_augmentation.setdefault("min_window_size", rt_augmentation.min_window_size)
+    enriched_rt_augmentation.setdefault("output_mode", rt_augmentation.output_mode)
+    enriched_rt_augmentation.setdefault("feet_on_floor", rt_augmentation.feet_on_floor)
+    enriched_rt_augmentation.setdefault("use_subject_stats", rt_augmentation.use_subject_stats)
+    enriched_rt["augmentation"] = enriched_rt_augmentation
     enriched_config["realtime"] = enriched_rt
 
     # Build filtering config from [realtime.filtering] with per-type sub-tables.
@@ -263,6 +298,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
         ),
         pose=rt_pose,
         filtering=rt_filtering,
+        augmentation=rt_augmentation,
         ik=RealtimeIKConfig(
             enabled=bool(ik_cfg.get("enabled", True)),
             window_size=int(ik_cfg.get("window_size", 10)),
