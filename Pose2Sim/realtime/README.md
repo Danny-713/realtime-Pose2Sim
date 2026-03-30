@@ -7,6 +7,7 @@ Current V1 scope is intentionally narrow:
 
 - single person
 - synchronized multi-video replay
+- live multi-camera capture
 - same-machine OpenSim API Visualizer
 - in-memory data flow from replay frames to OpenSim state packets
 
@@ -50,17 +51,30 @@ conda activate Pose2Sim
 python Pose2Sim/realtime/run_file_replay.py --config Pose2Sim/Demo_SinglePerson/Config.toml --no-visualizer --record-mot
 ```
 
+Live capture without GUI:
+
+```bash
+conda activate Pose2Sim
+python Pose2Sim/realtime/run_live_capture.py --config Pose2Sim/Demo_SinglePerson/Config.toml --no-visualizer
+```
+
 ## Runtime path
 
 The current V1 replay path is:
 
 `videos/*.mp4 -> pose2d -> single-person multiview packet -> per-frame triangulation -> causal realtime filter -> sliding marker window -> realtime IK -> OpenSimStatePacket -> visualizer/recorder`
 
+The live capture path keeps the same downstream stack and only swaps the frame
+source:
+
+`live cameras -> pose2d -> single-person multiview packet -> per-frame triangulation -> causal realtime filter -> sliding marker window -> realtime IK -> OpenSimStatePacket -> visualizer/recorder`
+
 The main runtime modules are:
 
 - `run_file_replay.py`: V1 replay runner
+- `run_live_capture.py`: V1 live-camera runner
 - `pipeline.py`: stage orchestration
-- `capture.py`: multi-video replay capture
+- `capture.py`: replay and live multi-camera capture backends
 - `pose2d.py`: single-person per-camera 2D estimation
 - `triangulate_frame.py`: per-frame 3D triangulation
 - `filter_realtime.py`: causal realtime filters
@@ -77,6 +91,7 @@ Support modules:
 ## Defaults and behavior
 
 - Replay input is auto-discovered from `project_dir/videos/*.mp4` when `realtime.capture.sources` is empty.
+- Live capture reads `realtime.capture.sources` as camera indices or stream URLs when `realtime.capture.source_type = "live_camera"`.
 - Calibration is auto-discovered from `project_dir/calibration/*.toml` when `realtime.calib_file` is empty.
 - OpenSim model resolution is:
   - use `realtime.ik.model_path` or `--model-path` when explicitly provided
@@ -84,6 +99,7 @@ Support modules:
   - otherwise fall back to an existing `project_dir/kinematics/*.osim`
 - The current V1 baseline is the simple model path; trial/complex models are kept as explicit comparison paths.
 - `playback_fps <= 0` means full-speed replay; no artificial slow-down is added.
+- For live capture, `playback_fps <= 0` means process frames as fast as the pipeline can consume them.
 - `--record-mot` forces coordinate recording and writes `realtime.mot`.
 - Recorder outputs go to `project_dir/realtime_output/` by default.
 - The runner prints a stage summary with capture, pose2d, triangulate, filter, and ik average timings.
@@ -105,4 +121,5 @@ They are not the V1 production entry point.
 - The runner creates `.codex_runtime/` under the repo root for temporary files and Matplotlib config to avoid noisy startup issues.
 - If `pose.backend=auto` fails on the current machine, the realtime estimator will fall back to CPU backends and log the selected runtime backend per camera.
 - GUI mode is intended for a local desktop session. Headless deployment is not part of this stage.
+- Headless live benchmarking is supported via `run_live_capture.py --no-visualizer`.
 - Current performance work treats simple model as the default realtime baseline; trial models may still run, but are expected to be slower.

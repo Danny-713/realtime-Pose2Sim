@@ -24,6 +24,12 @@ class RealtimeCaptureConfig:
     frame_rate: float = 0.0
     frame_offsets: Tuple[int, ...] = tuple()
     stop_on_shortest: bool = True
+    frame_width: int = 0
+    frame_height: int = 0
+    buffer_size: int = 1
+    read_timeout_ms: int = 1000
+    max_batch_skew_ms: float = 80.0
+    api_preference: int = 0
 
 
 @dataclass(frozen=True)
@@ -175,12 +181,17 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
 
     vid_img_extension = pose_cfg.get("vid_img_extension", "mp4")
 
+    source_type = str(capture_cfg.get("source_type", "video_replay")).lower()
+
     sources = _tuple_from_value(capture_cfg.get("sources"))
-    if not sources:
+    if not sources and source_type == "video_replay":
         sources = _discover_video_sources(project_dir, vid_img_extension)
     camera_ids = _tuple_from_value(capture_cfg.get("camera_ids"))
     if not camera_ids and sources:
-        camera_ids = tuple(Path(source).stem for source in sources)
+        if source_type == "live_camera":
+            camera_ids = tuple(f"cam{index + 1:02d}" for index in range(len(sources)))
+        else:
+            camera_ids = tuple(Path(source).stem for source in sources)
     frame_offsets = _int_tuple_from_value(capture_cfg.get("frame_offsets"))
     if not frame_offsets and camera_ids:
         frame_offsets = tuple(0 for _ in camera_ids)
@@ -237,12 +248,18 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
         calib_file=calib_file,
         pose_model=pose_cfg.get("pose_model", "HALPE_26"),
         capture=RealtimeCaptureConfig(
-            source_type=capture_cfg.get("source_type", "video_replay"),
+            source_type=source_type,
             camera_ids=camera_ids,
             sources=sources,
             frame_rate=float(capture_cfg.get("frame_rate", frame_rate)),
             frame_offsets=frame_offsets,
             stop_on_shortest=bool(capture_cfg.get("stop_on_shortest", True)),
+            frame_width=int(capture_cfg.get("frame_width", 0)),
+            frame_height=int(capture_cfg.get("frame_height", 0)),
+            buffer_size=int(capture_cfg.get("buffer_size", 1)),
+            read_timeout_ms=int(capture_cfg.get("read_timeout_ms", 1000)),
+            max_batch_skew_ms=float(capture_cfg.get("max_batch_skew_ms", 80.0)),
+            api_preference=int(capture_cfg.get("api_preference", 0)),
         ),
         pose=rt_pose,
         filtering=rt_filtering,

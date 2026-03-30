@@ -17,7 +17,12 @@ Supporting types and config helpers remain available, but they are secondary to
 those runtime modules.
 """
 
-from Pose2Sim.realtime.capture import FrameSource, ReplayFrameSource, VideoReplayFrameSource
+from Pose2Sim.realtime.capture import (
+    FrameSource,
+    LiveCameraFrameSource,
+    ReplayFrameSource,
+    VideoReplayFrameSource,
+)
 from Pose2Sim.realtime.filter_realtime import (
     PassThroughFilter,
     RealtimeButterworthWindowFilter,
@@ -48,6 +53,7 @@ __all__ = [
     "FramePacket",
     "FrameSource",
     "FrameTriangulator",
+    "LiveCameraFrameSource",
     "MarkerWindow",
     "MultiViewPosePacket",
     "OpenSimStatePacket",
