@@ -53,7 +53,11 @@ RUNTIME_DIR = apply_runtime_preflight()
 from Pose2Sim.common import natural_sort_key
 from Pose2Sim.kinematics import get_model_path, get_opensim_setup_dir
 from Pose2Sim.realtime.augmentation import RealtimeMarkerAugmenter
-from Pose2Sim.realtime.config import RealtimeConfig, RealtimeFilteringConfig
+from Pose2Sim.realtime.config import (
+    RealtimeConfig,
+    RealtimeFilteringConfig,
+    RealtimePostAugmentationFilterConfig,
+)
 from Pose2Sim.realtime.filter_realtime import (
     PassThroughFilter,
     RealtimeButterworthWindowFilter,
@@ -159,6 +163,29 @@ def build_pose_filter(filter_cfg: RealtimeFilteringConfig, frame_rate: float):
     )
 
 
+def build_post_augmentation_filter(
+    filter_cfg: RealtimePostAugmentationFilterConfig,
+    frame_rate: float,
+):
+    filter_type = filter_cfg.type
+
+    if not filter_cfg.enabled or filter_type == "none":
+        return None
+
+    if filter_type == "one_euro":
+        return RealtimeOneEuroFilter(
+            frame_rate=frame_rate,
+            min_cutoff=filter_cfg.one_euro_min_cutoff,
+            beta=filter_cfg.one_euro_beta,
+            d_cutoff=filter_cfg.one_euro_d_cutoff,
+        )
+
+    raise ValueError(
+        f"Unknown realtime post-augmentation filter type {filter_type!r}. "
+        "Supported types: 'one_euro', 'none'."
+    )
+
+
 def build_runtime_pipeline(
     realtime_config: RealtimeConfig,
     frame_source: Any,
@@ -182,6 +209,15 @@ def build_runtime_pipeline(
         marker_names=pose2d_estimator.keypoint_names,
     )
     pose_filter = build_pose_filter(realtime_config.filtering, frame_rate)
+    if realtime_config.post_augmentation_filter.enabled and not realtime_config.augmentation.enabled:
+        raise ValueError(
+            "realtime.post_augmentation_filter.enabled=true requires "
+            "realtime.augmentation.enabled=true."
+        )
+    post_augmentation_filter = build_post_augmentation_filter(
+        realtime_config.post_augmentation_filter,
+        frame_rate,
+    )
     marker_buffer = SlidingMarkerBuffer(
         window_size=realtime_config.ik.window_size,
         expected_marker_names=None,
@@ -238,6 +274,7 @@ def build_runtime_pipeline(
         marker_buffer=marker_buffer,
         pose3d_filter=pose_filter,
         marker_augmenter=marker_augmenter,
+        post_augmentation_filter=post_augmentation_filter,
         ik_solver=ik_solver,
         visualizer=visualizer,
         recorder=recorder,
@@ -248,6 +285,7 @@ def build_runtime_pipeline(
         "triangulator": triangulator,
         "pose_filter": pose_filter,
         "marker_augmenter": marker_augmenter,
+        "post_augmentation_filter": post_augmentation_filter,
         "marker_buffer": marker_buffer,
         "ik_solver": ik_solver,
         "visualizer": visualizer,
@@ -289,6 +327,11 @@ def log_runtime_configuration(
         realtime_config.augmentation.window_size,
         realtime_config.augmentation.output_mode,
     )
+    logging.info(
+        "  rt_post_augmentation_filter_enabled=%s  type=%s",
+        realtime_config.post_augmentation_filter.enabled,
+        realtime_config.post_augmentation_filter.type,
+    )
 
 
 def log_pipeline_components(details: dict[str, Any]) -> None:
@@ -300,6 +343,12 @@ def log_pipeline_components(details: dict[str, Any]) -> None:
             "  augmentation_output_markers=%d  response_markers=%d",
             len(marker_augmenter.output_marker_names or ()),
             len(marker_augmenter.response_marker_names),
+        )
+    post_augmentation_filter = details.get("post_augmentation_filter")
+    if post_augmentation_filter is not None:
+        logging.info(
+            "  post_augmentation_filter=%s",
+            type(post_augmentation_filter).__name__,
         )
 
 
@@ -326,6 +375,7 @@ def run_pipeline_loop(
     triangulate_times_ms: list[float] = []
     filter_times_ms: list[float] = []
     augmentation_times_ms: list[float] = []
+    post_filter_times_ms: list[float] = []
     ik_times_ms: list[float] = []
     valid_markers: list[int] = []
     reprojection_errors: list[float] = []
@@ -349,6 +399,7 @@ def run_pipeline_loop(
             triangulate_times_ms.append(float(step_metrics.get("triangulate_ms", 0.0)))
             filter_times_ms.append(float(step_metrics.get("filter_ms", 0.0)))
             augmentation_times_ms.append(float(step_metrics.get("augmentation_ms", 0.0)))
+            post_filter_times_ms.append(float(step_metrics.get("post_filter_ms", 0.0)))
             valid_markers.append(int(step_metrics.get("valid_markers", 0)))
             reproj = step_metrics.get("reprojection_error", float("nan"))
             if reproj is not None:
@@ -375,6 +426,7 @@ def run_pipeline_loop(
         "triangulate_avg_ms": _mean_or_nan(triangulate_times_ms),
         "filter_avg_ms": _mean_or_nan(filter_times_ms),
         "augmentation_avg_ms": _mean_or_nan(augmentation_times_ms),
+        "post_filter_avg_ms": _mean_or_nan(post_filter_times_ms),
         "ik_avg_ms": _mean_or_nan(ik_times_ms),
         "avg_valid_markers": _int_mean_or_zero(valid_markers),
         "avg_num_markers_in_use": _int_mean_or_zero(markers_in_use),
@@ -393,6 +445,7 @@ def log_pipeline_summary(summary: dict[str, float | int], *, finish_label: str) 
     logging.info("  triangulate_avg_ms=%.2f", float(summary["triangulate_avg_ms"]))
     logging.info("  filter_avg_ms=%.2f", float(summary["filter_avg_ms"]))
     logging.info("  augmentation_avg_ms=%.2f", float(summary["augmentation_avg_ms"]))
+    logging.info("  post_filter_avg_ms=%.2f", float(summary["post_filter_avg_ms"]))
     logging.info("  ik_avg_ms=%.2f", float(summary["ik_avg_ms"]))
     logging.info("Realtime data summary")
     logging.info("  avg_valid_markers=%.2f", float(summary["avg_valid_markers"]))

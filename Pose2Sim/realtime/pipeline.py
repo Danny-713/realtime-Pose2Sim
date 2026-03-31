@@ -45,6 +45,7 @@ class RealtimePipeline:
         associator: Optional[Any] = None,
         pose3d_filter: Optional[RealtimePoseFilter] = None,
         marker_augmenter: Optional[Any] = None,
+        post_augmentation_filter: Optional[RealtimePoseFilter] = None,
         ik_solver: Optional[Any] = None,
         visualizer: Optional[Any] = None,
         recorder: Optional[Any] = None,
@@ -57,6 +58,7 @@ class RealtimePipeline:
         self.triangulator = triangulator
         self.pose3d_filter = pose3d_filter
         self.marker_augmenter = marker_augmenter
+        self.post_augmentation_filter = post_augmentation_filter
         self.marker_buffer = marker_buffer
         self.ik_solver = ik_solver
         self.visualizer = visualizer
@@ -103,6 +105,7 @@ class RealtimePipeline:
             "triangulate_ms": 0.0,
             "filter_ms": 0.0,
             "augmentation_ms": 0.0,
+            "post_filter_ms": 0.0,
             "ik_ms": 0.0,
             "valid_markers": 0,
             "reprojection_error": np.nan,
@@ -137,6 +140,15 @@ class RealtimePipeline:
                 self.last_step_metrics = step_metrics
                 return None
             pose3d_packet = augmented
+
+        if self.post_augmentation_filter is not None:
+            t0 = time.perf_counter()
+            filtered = self.post_augmentation_filter.update(pose3d_packet)
+            step_metrics["post_filter_ms"] = (time.perf_counter() - t0) * 1000.0
+            if filtered is None:
+                self.last_step_metrics = step_metrics
+                return None
+            pose3d_packet = filtered
 
         markers_3d = np.asarray(pose3d_packet.markers_3d, dtype=float)
         if markers_3d.ndim == 2 and markers_3d.shape[1] == 3:

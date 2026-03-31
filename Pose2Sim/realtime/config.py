@@ -56,6 +56,15 @@ class RealtimeAugmentationConfig:
 
 
 @dataclass(frozen=True)
+class RealtimePostAugmentationFilterConfig:
+    enabled: bool = False
+    type: str = "one_euro"
+    one_euro_min_cutoff: float = 2.0
+    one_euro_beta: float = 0.5
+    one_euro_d_cutoff: float = 1.0
+
+
+@dataclass(frozen=True)
 class RealtimeVisualizerConfig:
     enabled: bool = True
     playback_fps: float = 0.0
@@ -101,6 +110,7 @@ class RealtimeConfig:
     pose: RealtimePoseConfig
     filtering: RealtimeFilteringConfig
     augmentation: RealtimeAugmentationConfig
+    post_augmentation_filter: RealtimePostAugmentationFilterConfig
     ik: RealtimeIKConfig
     visualizer: RealtimeVisualizerConfig
     recorder: RealtimeRecorderConfig
@@ -183,6 +193,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
     rt_pose_cfg = realtime_cfg.get("pose", {})
     filtering_cfg = realtime_cfg.get("filtering", {})
     augmentation_cfg = realtime_cfg.get("augmentation", {})
+    post_augmentation_filter_cfg = realtime_cfg.get("post_augmentation_filter", {})
     ik_cfg = realtime_cfg.get("ik", {})
     visualizer_cfg = realtime_cfg.get("visualizer", {})
     recorder_cfg = realtime_cfg.get("recorder", {})
@@ -258,6 +269,38 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
     enriched_rt_augmentation.setdefault("feet_on_floor", rt_augmentation.feet_on_floor)
     enriched_rt_augmentation.setdefault("use_subject_stats", rt_augmentation.use_subject_stats)
     enriched_rt["augmentation"] = enriched_rt_augmentation
+
+    rt_post_augmentation_filter_one_euro = post_augmentation_filter_cfg.get("one_euro", {})
+    rt_post_augmentation_filter = RealtimePostAugmentationFilterConfig(
+        enabled=bool(post_augmentation_filter_cfg.get("enabled", False)),
+        type=str(post_augmentation_filter_cfg.get("type", "one_euro")).lower(),
+        one_euro_min_cutoff=float(
+            rt_post_augmentation_filter_one_euro.get("cut_off_frequency", 2.0)
+        ),
+        one_euro_beta=float(rt_post_augmentation_filter_one_euro.get("beta", 0.5)),
+        one_euro_d_cutoff=float(
+            rt_post_augmentation_filter_one_euro.get("d_cut_off_frequency", 1.0)
+        ),
+    )
+    enriched_rt_post_augmentation_filter: Dict[str, Any] = dict(
+        enriched_rt.get("post_augmentation_filter", {})
+    )
+    enriched_rt_post_augmentation_filter.setdefault("enabled", rt_post_augmentation_filter.enabled)
+    enriched_rt_post_augmentation_filter.setdefault("type", rt_post_augmentation_filter.type)
+    enriched_rt_post_augmentation_filter_one_euro: Dict[str, Any] = dict(
+        enriched_rt_post_augmentation_filter.get("one_euro", {})
+    )
+    enriched_rt_post_augmentation_filter_one_euro.setdefault(
+        "cut_off_frequency", rt_post_augmentation_filter.one_euro_min_cutoff
+    )
+    enriched_rt_post_augmentation_filter_one_euro.setdefault(
+        "beta", rt_post_augmentation_filter.one_euro_beta
+    )
+    enriched_rt_post_augmentation_filter_one_euro.setdefault(
+        "d_cut_off_frequency", rt_post_augmentation_filter.one_euro_d_cutoff
+    )
+    enriched_rt_post_augmentation_filter["one_euro"] = enriched_rt_post_augmentation_filter_one_euro
+    enriched_rt["post_augmentation_filter"] = enriched_rt_post_augmentation_filter
     enriched_config["realtime"] = enriched_rt
 
     # Build filtering config from [realtime.filtering] with per-type sub-tables.
@@ -299,6 +342,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
         pose=rt_pose,
         filtering=rt_filtering,
         augmentation=rt_augmentation,
+        post_augmentation_filter=rt_post_augmentation_filter,
         ik=RealtimeIKConfig(
             enabled=bool(ik_cfg.get("enabled", True)),
             window_size=int(ik_cfg.get("window_size", 10)),

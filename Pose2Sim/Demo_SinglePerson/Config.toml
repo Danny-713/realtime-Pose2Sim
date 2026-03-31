@@ -369,7 +369,7 @@ det_frequency = 4    # Run detection every N frames during realtime (higher = fa
 parallel = true       # Run multi-camera 2D inference in parallel threads
 
 [realtime.filtering]
-type = 'butterworth'  # 'kalman', 'one_euro', 'butterworth', 'kalman_rts', or 'none'
+type = 'Kalman'  # 'kalman', 'one_euro', 'butterworth', 'kalman_rts', or 'none'
 
    [realtime.filtering.kalman]
    trust_ratio = 5  # Lower = smoother but more lag. Recommended range: 2~10 for realtime causal filtering.
@@ -397,6 +397,15 @@ min_window_size = 15
 output_mode = 'center' # 'center' = fixed-lag and steadier; 'latest' = lower lag but less smoothing.
 feet_on_floor = false  # Match offline augmenter option. Usually keep false for realtime tests.
 use_subject_stats = true  # Reuse participant height/mass if available; falls back safely if auto height fails.
+
+[realtime.post_augmentation_filter]
+enabled = true       # Optional lightweight smoothing stage after marker augmentation and before IK.
+type = 'one_euro'     # Currently only 'one_euro' or 'none' are supported here.
+
+   [realtime.post_augmentation_filter.one_euro]
+   cut_off_frequency = 2.0  # Lower = smoother but more lag. Applied after augmentation on richer markers.
+   beta = 0.5               # Velocity adaptation; keep modest to avoid reintroducing jitter.
+   d_cut_off_frequency = 1.0
 
 [realtime.ik]
 use_simple_model = true

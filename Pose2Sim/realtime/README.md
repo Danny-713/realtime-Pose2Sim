@@ -68,6 +68,11 @@ LSTM augmenter between filtering and the IK buffer:
 
 `videos/*.mp4 -> pose2d -> multiview packet -> triangulation -> causal realtime filter -> marker augmentation -> sliding marker window -> realtime IK`
 
+When `realtime.post_augmentation_filter.enabled = true`, a lightweight causal
+One Euro filter is inserted after augmentation and before the IK buffer:
+
+`videos/*.mp4 -> pose2d -> multiview packet -> triangulation -> causal realtime filter -> marker augmentation -> post-augmentation One Euro filter -> sliding marker window -> realtime IK`
+
 The live capture path keeps the same downstream stack and only swaps the frame
 source:
 
@@ -108,7 +113,7 @@ Support modules:
 - For live capture, `playback_fps <= 0` means process frames as fast as the pipeline can consume them.
 - `--record-mot` forces coordinate recording and writes `realtime.mot`.
 - Recorder outputs go to `project_dir/realtime_output/` by default.
-- The runner prints a stage summary with capture, pose2d, triangulate, filter, augmentation, and ik average timings.
+- The runner prints a stage summary with capture, pose2d, triangulate, filter, augmentation, post-filter, and ik average timings.
 - The runner also reports average valid 3D markers, average markers used by IK, and average reprojection error.
 
 ## Realtime augmentation config
@@ -137,6 +142,29 @@ Notes:
 - Height is reused from `project.participant_height` when numeric.
 - If height is `auto`, realtime estimates it once from the first valid augmentation window and then keeps it fixed.
 - The augmented packet keeps the original 3D keypoints and appends the LSTM response markers before IK.
+
+## Post-augmentation smoothing config
+
+If augmentation makes the richer marker set steadier overall but still leaves
+small high-frequency jitter, you can insert a lightweight One Euro filter
+before the IK window:
+
+```toml
+[realtime.post_augmentation_filter]
+enabled = true
+type = "one_euro"
+
+  [realtime.post_augmentation_filter.one_euro]
+  cut_off_frequency = 2.0
+  beta = 0.5
+  d_cut_off_frequency = 1.0
+```
+
+Notes:
+
+- This stage is intentionally separate from `realtime.filtering`, which still applies to the raw triangulated 3D markers.
+- The post-augmentation filter currently requires `realtime.augmentation.enabled = true`.
+- The goal is lightweight de-jittering, not large additional smoothing windows.
 
 ## Stage-0 regression scripts
 
