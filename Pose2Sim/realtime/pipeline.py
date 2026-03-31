@@ -43,6 +43,8 @@ class RealtimePipeline:
         triangulator: FrameTriangulator,
         marker_buffer: SlidingMarkerBuffer,
         associator: Optional[Any] = None,
+        pose2d_quality_mask: Optional[Any] = None,
+        offline_like_quality_processor: Optional[Any] = None,
         pose3d_filter: Optional[RealtimePoseFilter] = None,
         marker_augmenter: Optional[Any] = None,
         post_augmentation_filter: Optional[RealtimePoseFilter] = None,
@@ -56,6 +58,8 @@ class RealtimePipeline:
         self.pose2d_estimator = pose2d_estimator
         self.associator = associator
         self.triangulator = triangulator
+        self.pose2d_quality_mask = pose2d_quality_mask
+        self.offline_like_quality_processor = offline_like_quality_processor
         self.pose3d_filter = pose3d_filter
         self.marker_augmenter = marker_augmenter
         self.post_augmentation_filter = post_augmentation_filter
@@ -103,11 +107,15 @@ class RealtimePipeline:
         step_metrics: dict[str, Any] = {
             "pose2d_ms": 0.0,
             "triangulate_ms": 0.0,
+            "quality_mode_ms": 0.0,
             "filter_ms": 0.0,
             "augmentation_ms": 0.0,
             "post_filter_ms": 0.0,
             "ik_ms": 0.0,
             "valid_markers": 0,
+            "quality_mode_gated_markers": 0,
+            "quality_mode_interpolated_markers": 0,
+            "quality_mode_outlier_replaced_markers": 0,
             "reprojection_error": np.nan,
             "num_markers_in_use": 0,
             "window_range": None,
@@ -118,10 +126,32 @@ class RealtimePipeline:
         step_metrics["pose2d_ms"] = (time.perf_counter() - t0) * 1000.0
 
         multiview_packet = self._associate(pose2d_packets)
+        if self.pose2d_quality_mask is not None:
+            t0 = time.perf_counter()
+            multiview_packet = self.pose2d_quality_mask.apply(multiview_packet)
+            step_metrics["quality_mode_ms"] += (time.perf_counter() - t0) * 1000.0
 
         t0 = time.perf_counter()
         pose3d_packet = self.triangulator.triangulate(multiview_packet)
         step_metrics["triangulate_ms"] = (time.perf_counter() - t0) * 1000.0
+
+        if self.offline_like_quality_processor is not None:
+            t0 = time.perf_counter()
+            cleaned = self.offline_like_quality_processor.update(pose3d_packet)
+            step_metrics["quality_mode_ms"] += (time.perf_counter() - t0) * 1000.0
+            if cleaned is None:
+                self.last_step_metrics = step_metrics
+                return None
+            pose3d_packet = cleaned
+            step_metrics["quality_mode_gated_markers"] = int(
+                pose3d_packet.metadata.get("quality_mode_gated_markers", 0)
+            )
+            step_metrics["quality_mode_interpolated_markers"] = int(
+                pose3d_packet.metadata.get("quality_mode_interpolated_markers", 0)
+            )
+            step_metrics["quality_mode_outlier_replaced_markers"] = int(
+                pose3d_packet.metadata.get("quality_mode_outlier_replaced_markers", 0)
+            )
 
         if self.pose3d_filter is not None:
             t0 = time.perf_counter()

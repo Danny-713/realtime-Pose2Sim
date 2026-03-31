@@ -63,15 +63,20 @@ The current V1 replay path is:
 
 `videos/*.mp4 -> pose2d -> single-person multiview packet -> per-frame triangulation -> causal realtime filter -> sliding marker window -> realtime IK -> OpenSimStatePacket -> visualizer/recorder`
 
+When `realtime.offline_like_quality.enabled = true`, realtime inserts a shared
+offline-like quality mode before the current realtime filter:
+
+`videos/*.mp4 -> pose2d -> 2D quality mask -> triangulation -> raw 3D quality gate -> short-gap fill -> Hampel-like outlier rejection -> causal realtime filter -> sliding marker window -> realtime IK`
+
 When `realtime.augmentation.enabled = true`, the pipeline inserts a fixed-lag
 LSTM augmenter between filtering and the IK buffer:
 
-`videos/*.mp4 -> pose2d -> multiview packet -> triangulation -> causal realtime filter -> marker augmentation -> sliding marker window -> realtime IK`
+`videos/*.mp4 -> pose2d -> 2D quality mask -> triangulation -> offline-like quality processing -> causal realtime filter -> marker augmentation -> sliding marker window -> realtime IK`
 
 When `realtime.post_augmentation_filter.enabled = true`, a lightweight causal
 One Euro filter is inserted after augmentation and before the IK buffer:
 
-`videos/*.mp4 -> pose2d -> multiview packet -> triangulation -> causal realtime filter -> marker augmentation -> post-augmentation One Euro filter -> sliding marker window -> realtime IK`
+`videos/*.mp4 -> pose2d -> 2D quality mask -> triangulation -> offline-like quality processing -> causal realtime filter -> marker augmentation -> post-augmentation One Euro filter -> sliding marker window -> realtime IK`
 
 The live capture path keeps the same downstream stack and only swaps the frame
 source:
@@ -86,6 +91,7 @@ The main runtime modules are:
 - `capture.py`: replay and live multi-camera capture backends
 - `pose2d.py`: single-person per-camera 2D estimation
 - `triangulate_frame.py`: per-frame 3D triangulation
+- `offline_like_quality.py`: optional offline-like 2D/3D quality mode before realtime filtering
 - `filter_realtime.py`: causal realtime filters
 - `augmentation.py`: optional fixed-lag LSTM marker augmentation
 - `marker_buffer.py`: sliding window for small-window IK
@@ -113,8 +119,38 @@ Support modules:
 - For live capture, `playback_fps <= 0` means process frames as fast as the pipeline can consume them.
 - `--record-mot` forces coordinate recording and writes `realtime.mot`.
 - Recorder outputs go to `project_dir/realtime_output/` by default.
-- The runner prints a stage summary with capture, pose2d, triangulate, filter, augmentation, post-filter, and ik average timings.
-- The runner also reports average valid 3D markers, average markers used by IK, and average reprojection error.
+- The runner prints a stage summary with capture, pose2d, triangulate, quality-mode, filter, augmentation, post-filter, and ik average timings.
+- The runner also reports average valid 3D markers, average quality-gated/interpolated/outlier-replaced markers, average markers used by IK, and average reprojection error.
+
+## Offline-like quality mode config
+
+If realtime raw 3D differs noticeably from the offline `filt`/`LSTM` route, you
+can enable a shared offline-like quality mode immediately after triangulation:
+
+```toml
+[realtime.offline_like_quality]
+enabled = true
+window_size = 21
+min_window_size = 21
+output_mode = "center"
+mask_low_likelihood_2d = true
+gate_high_reproj_3d = true
+interp_short_gaps = true
+interp_max_gap = 20
+fill_large_gaps_with = "last_value"
+reject_outliers = true
+hampel_window_size = 7
+hampel_n_sigma = 2.0
+target = "all_markers"
+```
+
+Notes:
+
+- The current implementation only supports `Body_with_feet / HALPE_26`.
+- `output_mode = "center"` is currently the only supported mode.
+- The quality mode masks low-confidence 2D observations before triangulation, then applies per-marker 3D gating, short-gap interpolation, and Hampel-like 1D outlier replacement on the raw 3D window.
+- The goal is to bring realtime closer to the offline `triangulation -> fill -> Hampel -> filter` logic without requiring the full sequence.
+- Do not enable this at the same time as the legacy `realtime.pre_augmentation_cleanup` route.
 
 ## Realtime augmentation config
 

@@ -56,6 +56,7 @@ from Pose2Sim.realtime.augmentation import RealtimeMarkerAugmenter
 from Pose2Sim.realtime.config import (
     RealtimeConfig,
     RealtimeFilteringConfig,
+    RealtimeOfflineLikeQualityConfig,
     RealtimePostAugmentationFilterConfig,
 )
 from Pose2Sim.realtime.filter_realtime import (
@@ -66,6 +67,10 @@ from Pose2Sim.realtime.filter_realtime import (
     RealtimeOneEuroFilter,
 )
 from Pose2Sim.realtime.marker_buffer import SlidingMarkerBuffer
+from Pose2Sim.realtime.offline_like_quality import (
+    RealtimeOfflineLikeQualityProcessor,
+    RealtimePose2DQualityMask,
+)
 from Pose2Sim.realtime.opensim_ik import RealtimeIKSolver
 from Pose2Sim.realtime.opensim_viz import OpenSimVisualizer
 from Pose2Sim.realtime.pipeline import RealtimePipeline
@@ -186,6 +191,44 @@ def build_post_augmentation_filter(
     )
 
 
+def build_pose2d_quality_mask(quality_cfg: RealtimeOfflineLikeQualityConfig):
+    if not quality_cfg.enabled or not quality_cfg.mask_low_likelihood_2d:
+        return None
+
+    return RealtimePose2DQualityMask(
+        likelihood_threshold=quality_cfg.likelihood_threshold_triangulation,
+    )
+
+
+def build_offline_like_quality_processor(
+    quality_cfg: RealtimeOfflineLikeQualityConfig,
+    *,
+    pose_model: str,
+    raw_marker_names,
+):
+    if not quality_cfg.enabled:
+        return None
+
+    return RealtimeOfflineLikeQualityProcessor(
+        pose_model=pose_model,
+        raw_marker_names=raw_marker_names,
+        window_size=quality_cfg.window_size,
+        min_window_size=quality_cfg.min_window_size,
+        output_mode=quality_cfg.output_mode,
+        gate_high_reproj_3d=quality_cfg.gate_high_reproj_3d,
+        reproj_error_threshold_triangulation=quality_cfg.reproj_error_threshold_triangulation,
+        min_cameras_for_triangulation=quality_cfg.min_cameras_for_triangulation,
+        interp_short_gaps=quality_cfg.interp_short_gaps,
+        interp_max_gap=quality_cfg.interp_max_gap,
+        fill_large_gaps_with=quality_cfg.fill_large_gaps_with,
+        reject_outliers=quality_cfg.reject_outliers,
+        hampel_window_size=quality_cfg.hampel_window_size,
+        hampel_n_sigma=quality_cfg.hampel_n_sigma,
+        target=quality_cfg.target,
+        parameter_source=quality_cfg.parameter_source,
+    )
+
+
 def build_runtime_pipeline(
     realtime_config: RealtimeConfig,
     frame_source: Any,
@@ -208,6 +251,12 @@ def build_runtime_pipeline(
         camera_ids=realtime_config.capture.camera_ids,
         marker_names=pose2d_estimator.keypoint_names,
     )
+    pose2d_quality_mask = build_pose2d_quality_mask(realtime_config.offline_like_quality)
+    offline_like_quality_processor = build_offline_like_quality_processor(
+        realtime_config.offline_like_quality,
+        pose_model=realtime_config.pose_model,
+        raw_marker_names=pose2d_estimator.keypoint_names,
+    )
     pose_filter = build_pose_filter(realtime_config.filtering, frame_rate)
     if realtime_config.post_augmentation_filter.enabled and not realtime_config.augmentation.enabled:
         raise ValueError(
@@ -218,12 +267,9 @@ def build_runtime_pipeline(
         realtime_config.post_augmentation_filter,
         frame_rate,
     )
-    marker_buffer = SlidingMarkerBuffer(
-        window_size=realtime_config.ik.window_size,
-        expected_marker_names=None,
-    )
 
     marker_augmenter = None
+    expected_marker_names = tuple(pose2d_estimator.keypoint_names)
     if realtime_config.augmentation.enabled:
         marker_augmenter = RealtimeMarkerAugmenter(
             config_dict=realtime_config.raw_config,
@@ -237,9 +283,12 @@ def build_runtime_pipeline(
             feet_on_floor=realtime_config.augmentation.feet_on_floor,
             use_subject_stats=realtime_config.augmentation.use_subject_stats,
         )
-        marker_buffer.expected_marker_names = marker_augmenter.output_marker_names
-    else:
-        marker_buffer.expected_marker_names = pose2d_estimator.keypoint_names
+        expected_marker_names = marker_augmenter.output_marker_names
+
+    marker_buffer = SlidingMarkerBuffer(
+        window_size=realtime_config.ik.window_size,
+        expected_marker_names=expected_marker_names,
+    )
 
     ik_solver = None
     if realtime_config.ik.enabled:
@@ -272,6 +321,8 @@ def build_runtime_pipeline(
         pose2d_estimator=pose2d_estimator,
         triangulator=triangulator,
         marker_buffer=marker_buffer,
+        pose2d_quality_mask=pose2d_quality_mask,
+        offline_like_quality_processor=offline_like_quality_processor,
         pose3d_filter=pose_filter,
         marker_augmenter=marker_augmenter,
         post_augmentation_filter=post_augmentation_filter,
@@ -283,6 +334,8 @@ def build_runtime_pipeline(
     return pipeline, {
         "pose2d_estimator": pose2d_estimator,
         "triangulator": triangulator,
+        "pose2d_quality_mask": pose2d_quality_mask,
+        "offline_like_quality_processor": offline_like_quality_processor,
         "pose_filter": pose_filter,
         "marker_augmenter": marker_augmenter,
         "post_augmentation_filter": post_augmentation_filter,
@@ -319,6 +372,21 @@ def log_runtime_configuration(
         realtime_config.pose.parallel,
     )
     logging.info("  rt_filter_type=%s", realtime_config.filtering.type)
+    if realtime_config.pre_augmentation_cleanup.enabled:
+        logging.info(
+            "  rt_pre_augmentation_cleanup_enabled=%s  window=%d  output_mode=%s  target=%s",
+            realtime_config.pre_augmentation_cleanup.enabled,
+            realtime_config.pre_augmentation_cleanup.window_size,
+            realtime_config.pre_augmentation_cleanup.output_mode,
+            realtime_config.pre_augmentation_cleanup.target,
+        )
+    logging.info(
+        "  rt_offline_like_quality_enabled=%s  window=%d  output_mode=%s  params=%s",
+        realtime_config.offline_like_quality.enabled,
+        realtime_config.offline_like_quality.window_size,
+        realtime_config.offline_like_quality.output_mode,
+        realtime_config.offline_like_quality.parameter_source,
+    )
     logging.info(
         "  rt_augmentation_enabled=%s  model=%s  version=%s  window=%d  output_mode=%s",
         realtime_config.augmentation.enabled,
@@ -332,11 +400,49 @@ def log_runtime_configuration(
         realtime_config.post_augmentation_filter.enabled,
         realtime_config.post_augmentation_filter.type,
     )
+    quality_delay = (
+        realtime_config.offline_like_quality.window_size // 2
+        if realtime_config.offline_like_quality.enabled
+        and realtime_config.offline_like_quality.output_mode == "center"
+        else 0
+    )
+    filter_delay = 0
+    if realtime_config.filtering.type == "butterworth":
+        filter_delay = realtime_config.filtering.butterworth_window_size // 2
+    elif realtime_config.filtering.type == "kalman_rts":
+        filter_delay = realtime_config.filtering.kalman_rts_window_size // 2
+    augmentation_delay = (
+        realtime_config.augmentation.window_size // 2
+        if realtime_config.augmentation.enabled and realtime_config.augmentation.output_mode == "center"
+        else 0
+    )
+    if quality_delay > 0 and (filter_delay > 0 or augmentation_delay > 0):
+        total_delay_frames = quality_delay + filter_delay + augmentation_delay
+        logging.info(
+            "  rt_fixed_lag_delay_frames=%d (~%.3fs): quality=%d filter=%d augmentation=%d",
+            total_delay_frames,
+            total_delay_frames / float(frame_rate) if frame_rate > 0 else float("nan"),
+            quality_delay,
+            filter_delay,
+            augmentation_delay,
+        )
 
 
 def log_pipeline_components(details: dict[str, Any]) -> None:
     pose2d_estimator = details["pose2d_estimator"]
     logging.info("  runtime_pose_backends=%s", pose2d_estimator.runtime_choices)
+    pose2d_quality_mask = details.get("pose2d_quality_mask")
+    if pose2d_quality_mask is not None:
+        logging.info(
+            "  pose2d_quality_mask=%s",
+            type(pose2d_quality_mask).__name__,
+        )
+    offline_like_quality_processor = details.get("offline_like_quality_processor")
+    if offline_like_quality_processor is not None:
+        logging.info(
+            "  offline_like_quality_processor=%s",
+            type(offline_like_quality_processor).__name__,
+        )
     marker_augmenter = details.get("marker_augmenter")
     if marker_augmenter is not None:
         logging.info(
@@ -373,11 +479,15 @@ def run_pipeline_loop(
     capture_times_ms: list[float] = []
     pose2d_times_ms: list[float] = []
     triangulate_times_ms: list[float] = []
+    quality_mode_times_ms: list[float] = []
     filter_times_ms: list[float] = []
     augmentation_times_ms: list[float] = []
     post_filter_times_ms: list[float] = []
     ik_times_ms: list[float] = []
     valid_markers: list[int] = []
+    quality_mode_gated_markers: list[int] = []
+    quality_mode_interpolated_markers: list[int] = []
+    quality_mode_outlier_replaced_markers: list[int] = []
     reprojection_errors: list[float] = []
     markers_in_use: list[int] = []
     start_time = time.perf_counter()
@@ -397,10 +507,18 @@ def run_pipeline_loop(
             step_metrics = dict(pipeline.last_step_metrics)
             pose2d_times_ms.append(float(step_metrics.get("pose2d_ms", 0.0)))
             triangulate_times_ms.append(float(step_metrics.get("triangulate_ms", 0.0)))
+            quality_mode_times_ms.append(float(step_metrics.get("quality_mode_ms", 0.0)))
             filter_times_ms.append(float(step_metrics.get("filter_ms", 0.0)))
             augmentation_times_ms.append(float(step_metrics.get("augmentation_ms", 0.0)))
             post_filter_times_ms.append(float(step_metrics.get("post_filter_ms", 0.0)))
             valid_markers.append(int(step_metrics.get("valid_markers", 0)))
+            quality_mode_gated_markers.append(int(step_metrics.get("quality_mode_gated_markers", 0)))
+            quality_mode_interpolated_markers.append(
+                int(step_metrics.get("quality_mode_interpolated_markers", 0))
+            )
+            quality_mode_outlier_replaced_markers.append(
+                int(step_metrics.get("quality_mode_outlier_replaced_markers", 0))
+            )
             reproj = step_metrics.get("reprojection_error", float("nan"))
             if reproj is not None:
                 reprojection_errors.append(float(reproj))
@@ -424,11 +542,17 @@ def run_pipeline_loop(
         "capture_avg_ms": _mean_or_nan(capture_times_ms),
         "pose2d_avg_ms": _mean_or_nan(pose2d_times_ms),
         "triangulate_avg_ms": _mean_or_nan(triangulate_times_ms),
+        "quality_mode_avg_ms": _mean_or_nan(quality_mode_times_ms),
         "filter_avg_ms": _mean_or_nan(filter_times_ms),
         "augmentation_avg_ms": _mean_or_nan(augmentation_times_ms),
         "post_filter_avg_ms": _mean_or_nan(post_filter_times_ms),
         "ik_avg_ms": _mean_or_nan(ik_times_ms),
         "avg_valid_markers": _int_mean_or_zero(valid_markers),
+        "quality_mode_gated_markers_avg": _int_mean_or_zero(quality_mode_gated_markers),
+        "quality_mode_interpolated_markers_avg": _int_mean_or_zero(quality_mode_interpolated_markers),
+        "quality_mode_outlier_replaced_markers_avg": _int_mean_or_zero(
+            quality_mode_outlier_replaced_markers
+        ),
         "avg_num_markers_in_use": _int_mean_or_zero(markers_in_use),
         "avg_reprojection_error": _mean_or_nan(reprojection_errors),
     }
@@ -443,11 +567,24 @@ def log_pipeline_summary(summary: dict[str, float | int], *, finish_label: str) 
     logging.info("  capture_avg_ms=%.2f", float(summary["capture_avg_ms"]))
     logging.info("  pose2d_avg_ms=%.2f", float(summary["pose2d_avg_ms"]))
     logging.info("  triangulate_avg_ms=%.2f", float(summary["triangulate_avg_ms"]))
+    logging.info("  quality_mode_avg_ms=%.2f", float(summary["quality_mode_avg_ms"]))
     logging.info("  filter_avg_ms=%.2f", float(summary["filter_avg_ms"]))
     logging.info("  augmentation_avg_ms=%.2f", float(summary["augmentation_avg_ms"]))
     logging.info("  post_filter_avg_ms=%.2f", float(summary["post_filter_avg_ms"]))
     logging.info("  ik_avg_ms=%.2f", float(summary["ik_avg_ms"]))
     logging.info("Realtime data summary")
     logging.info("  avg_valid_markers=%.2f", float(summary["avg_valid_markers"]))
+    logging.info(
+        "  quality_mode_gated_markers_avg=%.2f",
+        float(summary["quality_mode_gated_markers_avg"]),
+    )
+    logging.info(
+        "  quality_mode_interpolated_markers_avg=%.2f",
+        float(summary["quality_mode_interpolated_markers_avg"]),
+    )
+    logging.info(
+        "  quality_mode_outlier_replaced_markers_avg=%.2f",
+        float(summary["quality_mode_outlier_replaced_markers_avg"]),
+    )
     logging.info("  avg_num_markers_in_use=%.2f", float(summary["avg_num_markers_in_use"]))
     logging.info("  avg_reprojection_error=%.5f", float(summary["avg_reprojection_error"]))

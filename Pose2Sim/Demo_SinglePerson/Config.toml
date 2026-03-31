@@ -75,7 +75,7 @@ mode = 'balanced' # 'lightweight', 'balanced', 'performance',
 #          'pose_input_size':[256,256]}"""
 
 
-det_frequency = 4 # Run person detection only every N frames, and inbetween track previously detected bounding boxes (pose estimation is still run on all frames). 
+det_frequency = 1 # Run person detection only every N frames, and inbetween track previously detected bounding boxes (pose estimation is still run on all frames). 
                   # Equal to or greater than 1, can be as high as you want in simple uncrowded cases. Much faster, but might be less accurate. 
 device = 'auto' # 'auto', 'CPU', 'CUDA', 'MPS', 'ROCM'
 backend = 'auto' # 'auto', 'openvino', 'onnxruntime', 'opencv'
@@ -387,6 +387,32 @@ type = 'Kalman'  # 'kalman', 'one_euro', 'butterworth', 'kalman_rts', or 'none'
    [realtime.filtering.kalman_rts]
    trust_ratio = 5   # Same as causal Kalman. Lower = smoother.
    window_size = 20   # Forward Kalman + backward RTS on this window. Middle frame is emitted (latency = window_size/2).
+
+[realtime.offline_like_quality]
+enabled = true                    # Optional offline-like quality mode before realtime filtering/augmentation.
+window_size = 11                   # Fixed-lag quality window. Center frame is emitted (latency = window_size/2).
+min_window_size = 11
+output_mode = 'center'             # Current implementation only supports 'center'.
+mask_low_likelihood_2d = true      # Apply offline-style 2D score masking before triangulation.
+gate_high_reproj_3d = true         # Drop raw 3D markers whose per-marker reprojection quality is too poor.
+interp_short_gaps = true           # Interpolate short NaN gaps inside the fixed-lag window.
+interp_max_gap = 20                # Reuse the offline interpolation gap logic for short gaps.
+fill_large_gaps_with = 'last_value' # 'last_value', 'nan', or 'zeros'
+reject_outliers = true             # Hampel-like 1D outlier replacement on each marker coordinate before realtime filtering.
+hampel_window_size = 7
+hampel_n_sigma = 2.0
+target = 'all_markers'             # First version works on all raw HALPE_26 markers.
+
+[realtime.pre_augmentation_cleanup]
+enabled = false               # Legacy experimental route. Keep disabled when offline_like_quality is enabled.
+window_size = 9               # Fixed-lag cleanup window. Center frame is emitted (latency = window_size/2).
+min_window_size = 9
+output_mode = 'center'        # Current implementation only supports 'center'.
+max_marker_deviation_m = 0.10 # Flag markers that deviate too far from the local window median.
+max_marker_velocity_m_s = 6.0 # Flag markers whose motion relative to the previous clean output is unrealistically fast.
+max_segment_deviation_ratio = 0.20  # Flag limb segments whose length deviates too much inside the local window.
+replacement = 'interpolate'   # Preferred repair strategy: interpolate -> previous clean value -> local median.
+target = 'limbs'              # Current implementation focuses on shoulder/elbow/wrist and hip/knee/ankle chains.
 
 [realtime.augmentation]
 enabled = true        # Toggle realtime marker augmentation on/off for A/B comparison.

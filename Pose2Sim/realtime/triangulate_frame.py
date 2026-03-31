@@ -128,6 +128,9 @@ class RealtimeFrameTriangulator:
         marker_positions = []
         reprojection_errors = []
         excluded_camera_counts = []
+        per_marker_reprojection_errors = []
+        per_marker_excluded_cameras = []
+        per_marker_valid_after_triangulation = []
 
         for marker_index, marker_name in enumerate(self.marker_names):
             coords = self._collect_camera_coords(packet, marker_index)
@@ -147,10 +150,23 @@ class RealtimeFrameTriangulator:
                 self.projection_matrices,
                 self.calib_params,
             )
-            marker_positions.append(np.asarray(q, dtype=float))
+            q_array = np.asarray(q, dtype=float)
+            marker_positions.append(q_array)
             if np.isfinite(error_min):
                 reprojection_errors.append(float(error_min))
             excluded_camera_counts.append(int(nb_cams_excluded))
+            per_marker_reprojection_errors.append(float(error_min) if np.isfinite(error_min) else np.nan)
+            excluded_camera_ids = np.atleast_1d(excluded_camera_ids).tolist()
+            excluded_camera_names = []
+            for camera_index in excluded_camera_ids:
+                try:
+                    camera_index_int = int(camera_index)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= camera_index_int < len(self.camera_ids):
+                    excluded_camera_names.append(self.camera_ids[camera_index_int])
+            per_marker_excluded_cameras.append(excluded_camera_names)
+            per_marker_valid_after_triangulation.append(bool(np.isfinite(q_array).all() and np.isfinite(error_min)))
 
         marker_array = np.asarray(marker_positions, dtype=float)
         marker_array = self._zup_to_yup(marker_array)
@@ -166,6 +182,9 @@ class RealtimeFrameTriangulator:
             metadata={
                 "mean_excluded_cameras": float(np.mean(excluded_camera_counts)) if excluded_camera_counts else 0.0,
                 "num_valid_markers": int(np.sum(np.isfinite(marker_array[:, 0]))),
+                "per_marker_reprojection_error": per_marker_reprojection_errors,
+                "per_marker_excluded_cameras": per_marker_excluded_cameras,
+                "per_marker_valid_after_triangulation": per_marker_valid_after_triangulation,
             },
         )
 

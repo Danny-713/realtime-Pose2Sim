@@ -56,6 +56,27 @@ class RealtimeAugmentationConfig:
 
 
 @dataclass(frozen=True)
+class RealtimeOfflineLikeQualityConfig:
+    enabled: bool = False
+    window_size: int = 21
+    min_window_size: int = 21
+    output_mode: str = "center"
+    mask_low_likelihood_2d: bool = True
+    gate_high_reproj_3d: bool = True
+    likelihood_threshold_triangulation: float = 0.3
+    reproj_error_threshold_triangulation: float = 15.0
+    min_cameras_for_triangulation: int = 2
+    interp_short_gaps: bool = True
+    interp_max_gap: int = 20
+    fill_large_gaps_with: str = "last_value"
+    reject_outliers: bool = True
+    hampel_window_size: int = 7
+    hampel_n_sigma: float = 2.0
+    target: str = "all_markers"
+    parameter_source: str = "offline_defaults"
+
+
+@dataclass(frozen=True)
 class RealtimePostAugmentationFilterConfig:
     enabled: bool = False
     type: str = "one_euro"
@@ -102,12 +123,27 @@ class RealtimeFilteringConfig:
 
 
 @dataclass(frozen=True)
+class RealtimePreAugmentationCleanupConfig:
+    enabled: bool = False
+    window_size: int = 9
+    min_window_size: int = 9
+    output_mode: str = "center"
+    max_marker_deviation_m: float = 0.10
+    max_marker_velocity_m_s: float = 6.0
+    max_segment_deviation_ratio: float = 0.20
+    replacement: str = "interpolate"
+    target: str = "limbs"
+
+
+@dataclass(frozen=True)
 class RealtimeConfig:
     project_dir: str
     calib_file: Optional[str]
     pose_model: str
     capture: RealtimeCaptureConfig
     pose: RealtimePoseConfig
+    pre_augmentation_cleanup: RealtimePreAugmentationCleanupConfig
+    offline_like_quality: RealtimeOfflineLikeQualityConfig
     filtering: RealtimeFilteringConfig
     augmentation: RealtimeAugmentationConfig
     post_augmentation_filter: RealtimePostAugmentationFilterConfig
@@ -192,11 +228,15 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
     capture_cfg = realtime_cfg.get("capture", {})
     rt_pose_cfg = realtime_cfg.get("pose", {})
     filtering_cfg = realtime_cfg.get("filtering", {})
+    pre_cleanup_cfg = realtime_cfg.get("pre_augmentation_cleanup", {})
+    offline_like_quality_cfg = realtime_cfg.get("offline_like_quality", {})
     augmentation_cfg = realtime_cfg.get("augmentation", {})
     post_augmentation_filter_cfg = realtime_cfg.get("post_augmentation_filter", {})
     ik_cfg = realtime_cfg.get("ik", {})
     visualizer_cfg = realtime_cfg.get("visualizer", {})
     recorder_cfg = realtime_cfg.get("recorder", {})
+    triangulation_cfg = config_dict.get("triangulation", {})
+    offline_filtering_cfg = config_dict.get("filtering", {})
 
     project_dir = str(Path(project_cfg.get("project_dir", ".")).resolve())
 
@@ -248,6 +288,128 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
         enriched_rt_pose.setdefault("device", rt_pose.device)
     enriched_rt_pose.setdefault("parallel", rt_pose.parallel)
     enriched_rt["pose"] = enriched_rt_pose
+
+    rt_pre_cleanup = RealtimePreAugmentationCleanupConfig(
+        enabled=bool(pre_cleanup_cfg.get("enabled", False)),
+        window_size=int(pre_cleanup_cfg.get("window_size", 9)),
+        min_window_size=int(pre_cleanup_cfg.get("min_window_size", 9)),
+        output_mode=str(pre_cleanup_cfg.get("output_mode", "center")).lower(),
+        max_marker_deviation_m=float(pre_cleanup_cfg.get("max_marker_deviation_m", 0.10)),
+        max_marker_velocity_m_s=float(pre_cleanup_cfg.get("max_marker_velocity_m_s", 6.0)),
+        max_segment_deviation_ratio=float(pre_cleanup_cfg.get("max_segment_deviation_ratio", 0.20)),
+        replacement=str(pre_cleanup_cfg.get("replacement", "interpolate")).lower(),
+        target=str(pre_cleanup_cfg.get("target", "limbs")).lower(),
+    )
+    enriched_rt_pre_cleanup: Dict[str, Any] = dict(enriched_rt.get("pre_augmentation_cleanup", {}))
+    enriched_rt_pre_cleanup.setdefault("enabled", rt_pre_cleanup.enabled)
+    enriched_rt_pre_cleanup.setdefault("window_size", rt_pre_cleanup.window_size)
+    enriched_rt_pre_cleanup.setdefault("min_window_size", rt_pre_cleanup.min_window_size)
+    enriched_rt_pre_cleanup.setdefault("output_mode", rt_pre_cleanup.output_mode)
+    enriched_rt_pre_cleanup.setdefault("max_marker_deviation_m", rt_pre_cleanup.max_marker_deviation_m)
+    enriched_rt_pre_cleanup.setdefault("max_marker_velocity_m_s", rt_pre_cleanup.max_marker_velocity_m_s)
+    enriched_rt_pre_cleanup.setdefault("max_segment_deviation_ratio", rt_pre_cleanup.max_segment_deviation_ratio)
+    enriched_rt_pre_cleanup.setdefault("replacement", rt_pre_cleanup.replacement)
+    enriched_rt_pre_cleanup.setdefault("target", rt_pre_cleanup.target)
+    enriched_rt["pre_augmentation_cleanup"] = enriched_rt_pre_cleanup
+
+    quality_source_keys = {
+        "likelihood_threshold_triangulation",
+        "reproj_error_threshold_triangulation",
+        "min_cameras_for_triangulation",
+        "interp_max_gap",
+        "fill_large_gaps_with",
+        "reject_outliers",
+        "hampel_window_size",
+        "hampel_n_sigma",
+    }
+    rt_offline_like_quality = RealtimeOfflineLikeQualityConfig(
+        enabled=bool(offline_like_quality_cfg.get("enabled", False)),
+        window_size=int(offline_like_quality_cfg.get("window_size", 21)),
+        min_window_size=int(offline_like_quality_cfg.get("min_window_size", 21)),
+        output_mode=str(offline_like_quality_cfg.get("output_mode", "center")).lower(),
+        mask_low_likelihood_2d=bool(offline_like_quality_cfg.get("mask_low_likelihood_2d", True)),
+        gate_high_reproj_3d=bool(offline_like_quality_cfg.get("gate_high_reproj_3d", True)),
+        likelihood_threshold_triangulation=float(
+            offline_like_quality_cfg.get(
+                "likelihood_threshold_triangulation",
+                triangulation_cfg.get("likelihood_threshold_triangulation", 0.3),
+            )
+        ),
+        reproj_error_threshold_triangulation=float(
+            offline_like_quality_cfg.get(
+                "reproj_error_threshold_triangulation",
+                triangulation_cfg.get("reproj_error_threshold_triangulation", 15.0),
+            )
+        ),
+        min_cameras_for_triangulation=int(
+            offline_like_quality_cfg.get(
+                "min_cameras_for_triangulation",
+                triangulation_cfg.get("min_cameras_for_triangulation", 2),
+            )
+        ),
+        interp_short_gaps=bool(offline_like_quality_cfg.get("interp_short_gaps", True)),
+        interp_max_gap=int(
+            offline_like_quality_cfg.get(
+                "interp_max_gap",
+                triangulation_cfg.get("interp_if_gap_smaller_than", 20),
+            )
+        ),
+        fill_large_gaps_with=str(
+            offline_like_quality_cfg.get(
+                "fill_large_gaps_with",
+                triangulation_cfg.get("fill_large_gaps_with", "last_value"),
+            )
+        ).lower(),
+        reject_outliers=bool(
+            offline_like_quality_cfg.get(
+                "reject_outliers",
+                offline_filtering_cfg.get("reject_outliers", True),
+            )
+        ),
+        hampel_window_size=int(offline_like_quality_cfg.get("hampel_window_size", 7)),
+        hampel_n_sigma=float(offline_like_quality_cfg.get("hampel_n_sigma", 2.0)),
+        target=str(offline_like_quality_cfg.get("target", "all_markers")).lower(),
+        parameter_source=(
+            "realtime_overrides"
+            if any(key in offline_like_quality_cfg for key in quality_source_keys)
+            else "offline_defaults"
+        ),
+    )
+    enriched_rt_offline_like_quality: Dict[str, Any] = dict(enriched_rt.get("offline_like_quality", {}))
+    enriched_rt_offline_like_quality.setdefault("enabled", rt_offline_like_quality.enabled)
+    enriched_rt_offline_like_quality.setdefault("window_size", rt_offline_like_quality.window_size)
+    enriched_rt_offline_like_quality.setdefault("min_window_size", rt_offline_like_quality.min_window_size)
+    enriched_rt_offline_like_quality.setdefault("output_mode", rt_offline_like_quality.output_mode)
+    enriched_rt_offline_like_quality.setdefault(
+        "mask_low_likelihood_2d", rt_offline_like_quality.mask_low_likelihood_2d
+    )
+    enriched_rt_offline_like_quality.setdefault(
+        "gate_high_reproj_3d", rt_offline_like_quality.gate_high_reproj_3d
+    )
+    enriched_rt_offline_like_quality.setdefault(
+        "likelihood_threshold_triangulation",
+        rt_offline_like_quality.likelihood_threshold_triangulation,
+    )
+    enriched_rt_offline_like_quality.setdefault(
+        "reproj_error_threshold_triangulation",
+        rt_offline_like_quality.reproj_error_threshold_triangulation,
+    )
+    enriched_rt_offline_like_quality.setdefault(
+        "min_cameras_for_triangulation",
+        rt_offline_like_quality.min_cameras_for_triangulation,
+    )
+    enriched_rt_offline_like_quality.setdefault("interp_short_gaps", rt_offline_like_quality.interp_short_gaps)
+    enriched_rt_offline_like_quality.setdefault("interp_max_gap", rt_offline_like_quality.interp_max_gap)
+    enriched_rt_offline_like_quality.setdefault(
+        "fill_large_gaps_with", rt_offline_like_quality.fill_large_gaps_with
+    )
+    enriched_rt_offline_like_quality.setdefault("reject_outliers", rt_offline_like_quality.reject_outliers)
+    enriched_rt_offline_like_quality.setdefault(
+        "hampel_window_size", rt_offline_like_quality.hampel_window_size
+    )
+    enriched_rt_offline_like_quality.setdefault("hampel_n_sigma", rt_offline_like_quality.hampel_n_sigma)
+    enriched_rt_offline_like_quality.setdefault("target", rt_offline_like_quality.target)
+    enriched_rt["offline_like_quality"] = enriched_rt_offline_like_quality
 
     rt_augmentation = RealtimeAugmentationConfig(
         enabled=bool(augmentation_cfg.get("enabled", False)),
@@ -321,6 +483,12 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
         kalman_rts_window_size=int(rt_filtering_kalman_rts.get("window_size", 20)),
     )
 
+    if rt_pre_cleanup.enabled and rt_offline_like_quality.enabled:
+        raise ValueError(
+            "realtime.pre_augmentation_cleanup.enabled=true cannot be combined with "
+            "realtime.offline_like_quality.enabled=true. Please enable only one pre-cleaning route."
+        )
+
     return RealtimeConfig(
         project_dir=project_dir,
         calib_file=calib_file,
@@ -340,6 +508,8 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
             api_preference=int(capture_cfg.get("api_preference", 0)),
         ),
         pose=rt_pose,
+        pre_augmentation_cleanup=rt_pre_cleanup,
+        offline_like_quality=rt_offline_like_quality,
         filtering=rt_filtering,
         augmentation=rt_augmentation,
         post_augmentation_filter=rt_post_augmentation_filter,
