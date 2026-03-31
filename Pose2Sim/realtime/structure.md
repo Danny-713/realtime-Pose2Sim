@@ -1,70 +1,30 @@
 # Pose2Sim Realtime 管线结构说明
 
-本文档面向当前 `Pose2Sim/realtime/` 目录，详细说明这条 realtime 管线的设计目标、数据流、输入输出、内存数据形状，以及它相对原始离线 Pose2Sim 管线的改造方式。
+这份文档描述的是当前 `Pose2Sim/realtime/` 目录里**已经接入主链**的 realtime 管线，而不是最早的 V1 设想稿。
 
-本文档的技术立场与此前 `opus第三次.md`、`gpt第三次.md` 的共识一致：
+如果你现在想快速理解项目，最重要的结论先放前面：
 
-- 实时化不是继续沿用 `JSON -> TRC -> MOT` 作为主通路
-- 实时化应建立一条与离线流程平行的 `realtime/` 管线
-- 在线 OpenSim 应优先走 `小窗口 IK + API Visualizer`
-- 第一版范围收敛为：
-  - 单人
-  - 多视频回放
-  - 同机显示
-  - 不做自动同步
-  - 不做 marker augmentation
-  - 不做 OpenSim GUI
-  - 不做服务器到客户端传输
-
-
-## 1. 总体目标
-
-当前 realtime V1 的目标不是“把现有离线脚本简单提速”，而是建立一条新的、以内存数据传递为主的在线管线：
-
-```text
-多机位视频回放
--> 2D 姿态估计
--> 单人多视角聚合
--> 逐帧三角化
--> 单向实时滤波
--> 滑动窗口 IK
--> OpenSim API Visualizer / recorder
-```
-
-这条管线的核心变化有两点：
-
-1. 原离线 Pose2Sim 依赖磁盘中间文件串联阶段；
-2. 当前 realtime 管线改为以内存对象作为阶段之间的数据契约。
+- `realtime/` 已经不是“逐帧三角化后直接进 IK”的简化版
+- 当前主链已经包含：
+  - replay / live 两种输入入口
+  - 2D 质量屏蔽
+  - per-frame triangulation
+  - offline-like quality 预清洗
+  - realtime 3D filter
+  - marker augmentation
+  - augmentation 后轻量滤波
+  - sliding-window IK
+  - visualizer / recorder
+- 阶段之间的数据契约仍然是**内存 packet**
+- 离线 `JSON -> TRC -> MOT` 仍然存在，但已经不是 realtime 主通路
 
 
-## 2. 从离线文件链到 realtime 内存链
+## 1. 当前 realtime 的目标
 
-### 2.1 原离线管线的主通路
-
-原始 Pose2Sim 更接近下面这种模式：
+当前 realtime 管线的目标不是复用离线脚本做“伪实时”，而是建立一条与离线平行的、以内存对象串联的在线管线：
 
 ```text
-视频
--> 2D 检测结果写 JSON
--> 同步 / 关联 / 三角化
--> 3D 点写 TRC
--> OpenSim Tool 读取 TRC
--> 生成 MOT
--> OpenSim GUI / 其他工具查看
-```
-
-这里的主要特征是：
-
-- 阶段之间靠文件交接
-- 工具偏批处理
-- 默认按整段序列思维工作
-
-### 2.2 当前 realtime 管线的主通路
-
-当前 `Pose2Sim/realtime/` 已经把主通路改成：
-
-```text
-videos/*.mp4
+视频回放 / 实时相机
 -> FramePacket
 -> Pose2DPacket
 -> MultiViewPosePacket
@@ -73,142 +33,162 @@ videos/*.mp4
 -> OpenSimStatePacket
 ```
 
-对应关系如下：
+其中：
 
-- 不再生成 `JSON` 作为 2D 主通路中间文件
-- 不再生成 `TRC` 作为 IK 主通路中间文件
-- 不再生成 `MOT` 才能可视化
-- `MOT` 只保留为可选 recorder 输出
-
-也就是说：
-
-- 磁盘文件仍然存在，但只承担“输入源 / 配置 / 可选输出”的角色
-- 阶段之间的数据交接，已经转为内存对象
+- replay 和 live 共享同一条 runtime 主链
+- 2D、3D、清洗、augmentation、IK 都在内存里连续完成
+- `.trc` / `.mot` 不再是实时主链的必经中间文件
 
 
-## 3. 当前管线里哪些东西还来自磁盘
+## 2. 当前主链的真实执行顺序
 
-当前 realtime V1 不是“完全无磁盘”，而是“主通路不依赖中间文件”。
+当前代码的主执行顺序以 [pipeline.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/pipeline.py) 为准。
 
-仍然从磁盘读取的东西有：
+### 2.1 共享 runtime 主链
 
-- 输入视频：`project_dir/videos/*.mp4`
-- 标定文件：`project_dir/calibration/*.toml`
-- OpenSim 模型：`.osim`
-- OpenSim Geometry
-- 配置文件：`Config.toml`
+```text
+capture
+-> pose2d
+-> associate(single-person)
+-> optional pose2d quality mask
+-> triangulate
+-> optional offline-like quality processor
+-> optional realtime pose filter
+-> optional marker augmenter
+-> optional post-augmentation filter
+-> marker buffer
+-> IK
+-> visualizer / recorder / publisher
+```
 
-可选写回磁盘的东西有：
+### 2.2 当前 Demo 配置下实际启用的阶段
 
-- `realtime.mot`
-- `realtime_coordinates.tsv`
+按当前 [Config.toml](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/Demo_SinglePerson/Config.toml)，主链通常是：
 
-但这些输出不是主通路必需条件。
+```text
+video replay
+-> 2D pose
+-> 2D quality mask
+-> triangulation
+-> offline-like quality
+-> Kalman filter
+-> LSTM marker augmentation
+-> post-augmentation One Euro
+-> IK buffer
+-> OpenSim IK
+-> visualizer / recorder
+```
+
+也就是说，当前项目里“最稳”的 realtime 路线，已经明显比早期 V1 复杂。
 
 
-## 4. 主模块与职责分层
+## 3. 与离线 Pose2Sim 的关系
 
-当前 `Pose2Sim/realtime/` 的主模块可以按下面理解：
+### 3.1 离线主通路
 
-### 4.1 入口层
+离线更接近：
 
-- `run_file_replay.py`
+```text
+video
+-> 2D json
+-> triangulation
+-> 3D trc
+-> filtering
+-> marker augmentation
+-> OpenSim tool / mot
+```
+
+### 3.2 realtime 主通路
+
+realtime 则改成：
+
+```text
+frame batches
+-> packets in memory
+-> online cleaning / filtering / IK
+-> optional visualization / recording
+```
+
+关键区别：
+
+- realtime 不以磁盘中间文件为主通路
+- realtime 不能直接照搬离线整段算法，所以很多地方做的是 fixed-lag 近似
+- 当前 `offline_like_quality` 的目标就是“把 realtime 前处理尽量向离线靠拢”
+
+
+## 4. 入口层与共享装配层
+
+### 4.1 文件回放入口
+
+文件：
+
+- [run_file_replay.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/run_file_replay.py)
 
 职责：
 
-- 读取 `Config.toml`
-- 解析模型路径、视频源、标定文件
-- 创建各个 realtime 模块
-- 启动整条 replay 管线
-- 打印 benchmark summary
+- 读取单 trial 的 `Config.toml`
+- 自动发现 `videos/*.mp4`
+- 解析 calibration、model path、frame rate
+- 创建 replay frame source
+- 调用共享的 runtime 装配逻辑
+- 运行 benchmark loop
 
-### 4.2 编排层
+### 4.2 实时相机入口
 
-- `pipeline.py`
+文件：
 
-职责：
-
-- 串联各阶段
-- 每步调用：
-  - `pose2d`
-  - `triangulate`
-  - `filter`
-  - `marker_buffer`
-  - `ik`
-- 记录阶段耗时与统计信息
-
-### 4.3 数据契约层
-
-- `packets.py`
+- [run_live_capture.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/run_live_capture.py)
 
 职责：
 
-- 定义内存传递的数据结构
-- 统一每个阶段的输入输出格式
+- 读取 `realtime.capture.source_type = "live_camera"`
+- 打开本地 camera index 或流地址
+- 复用同一条 runtime 主链
 
-### 4.4 感知与几何层
+### 4.3 共享装配层
 
-- `capture.py`
-- `pose2d.py`
-- `triangulate_frame.py`
-- `filter_realtime.py`
+文件：
 
-职责：
-
-- 把多视频帧逐步变成滤波后的 3D marker
-
-### 4.5 OpenSim 层
-
-- `marker_buffer.py`
-- `opensim_ik.py`
-- `opensim_viz.py`
-- `recorder.py`
+- [runtime_support.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/runtime_support.py)
 
 职责：
 
-- 管理小窗口
-- 做滚动窗口 IK
-- 更新 OpenSim 可视化
-- 记录关节坐标与可选 MOT
+- 统一 replay / live 的 preflight
+- 解析 realtime config
+- 创建所有运行时模块
+- 打印配置与 benchmark summary
+
+这是当前 realtime 的真正“组装中心”。
 
 
-## 5. 数据包与内存数据形状
+## 5. 数据契约：packet 级别怎么传
 
-当前 realtime 主通路依赖 [packets.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/packets.py) 中定义的 6 个核心 packet。
+文件：
+
+- [packets.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/packets.py)
+
+当前主链核心 packet 有 6 个。
 
 ### 5.1 `FramePacket`
 
-来源：
-
-- `capture.py`
-
-含义：
-
-- 某一个逻辑时刻、某一个相机的一张原始图像帧
+表示某个逻辑时刻、某个相机的一张图像。
 
 核心字段：
 
-- `frame_id: int`
-- `timestamp: float`
-- `camera_id: str`
-- `image: Any`
-- `metadata: dict`
+- `frame_id`
+- `timestamp`
+- `camera_id`
+- `image`
+- `metadata`
 
-实际内存形状：
+其中：
 
-- `image` 通常是 OpenCV 读出的数组
-- 常见形状：`(H, W, 3)`
-- 常见 dtype：`uint8`
+- `image` 通常是 OpenCV 读出的 `ndarray`
+- 形状通常是 `(H, W, 3)`
 
 ### 5.2 `Pose2DPacket`
 
-来源：
-
-- `pose2d.py`
-
-含义：
-
-- 某个相机、某一时刻、单人的 2D 关键点结果
+表示某一路相机在某一时刻的单人 2D 关键点结果。
 
 核心字段：
 
@@ -218,33 +198,24 @@ videos/*.mp4
 - `keypoints`
 - `scores`
 
-实际内存形状：
+典型形状：
 
 - `keypoints.shape == (K, 2)`
 - `scores.shape == (K,)`
 
-其中：
-
-- `K` = 当前 pose model 的关键点数
-- 例如 `Body_with_feet -> HALPE_26` 时，`K = 26`
+当前默认 `Body_with_feet -> HALPE_26`，所以 `K = 26`。
 
 ### 5.3 `MultiViewPosePacket`
 
-来源：
-
-- `pipeline.py` 中的默认单人聚合 `_associate()`
-
-含义：
-
-- 把同一逻辑时刻的 4 路 `Pose2DPacket` 聚合为一个多视角 observation
+表示同一逻辑时刻的多相机单人 2D observation。
 
 核心字段：
 
 - `frame_id`
 - `timestamp`
-- `poses_by_camera: Mapping[str, Pose2DPacket]`
+- `poses_by_camera`
 
-实际内存结构：
+典型结构：
 
 ```python
 {
@@ -257,45 +228,30 @@ videos/*.mp4
 
 ### 5.4 `Pose3DPacket`
 
-来源：
-
-- `triangulate_frame.py`
-- 后续可能被 `filter_realtime.py` 更新
-
-含义：
-
-- 单帧 3D marker 结果
+表示单帧 3D marker 结果。
 
 核心字段：
 
+- `frame_id`
+- `timestamp`
 - `marker_names`
 - `markers_3d`
 - `reprojection_error`
+- `source_camera_ids`
+- `metadata`
 
-实际内存形状：
+典型形状：
 
 - `markers_3d.shape == (M, 3)`
 
-其中：
+这里要注意：
 
-- `M` = marker 数
-- 当前第一版里，通常与 `K` 相同，基本可理解为“3D keypoints”
-
-说明：
-
-- 在当前 V1 中，没有 marker augmentation
-- 所以这里的 `marker` 基本就是“用于 OpenSim IK 的 3D 关键点”
-- 它不是离线 `.trc` 文件，而是内存中的 `numpy.ndarray`
+- augmentation 关闭时，`M` 通常接近原始 pose keypoints 数
+- augmentation 开启后，`M` 会变大，不再等于原始 keypoint 数
 
 ### 5.5 `MarkerWindow`
 
-来源：
-
-- `marker_buffer.py`
-
-含义：
-
-- 最近若干帧 3D marker 组成的滑动窗口
+表示最近若干帧 3D marker 组成的 IK 滑动窗口。
 
 核心字段：
 
@@ -304,338 +260,383 @@ videos/*.mp4
 - `marker_names`
 - `markers_3d`
 
-实际内存形状：
+典型形状：
 
 - `markers_3d.shape == (T, M, 3)`
 
-其中：
-
-- `T` = 窗口长度，当前默认是 `10`
-- `M` = marker 数
-
-这是当前 realtime 管线中唯一明确的“滑动窗口对象”。
-
 ### 5.6 `OpenSimStatePacket`
 
-来源：
-
-- `opensim_ik.py`
-
-含义：
-
-- 当前窗口求解出的 OpenSim 输出
+表示当前窗口求得的 OpenSim 输出。
 
 核心字段：
 
 - `frame_id`
 - `timestamp`
-- `coordinate_values: Mapping[str, float]`
-- `source_window: Tuple[int, int]`
+- `coordinate_values`
+- `source_window`
 - `latency_ms`
 - `metadata`
 
-实际内存结构：
 
-```python
-{
-    "pelvis_tilt": ...,
-    "hip_flexion_r": ...,
-    "knee_angle_r": ...,
-    ...
-}
-```
+## 6. 各阶段模块怎么分工
 
-这就是当前 visualizer 和 recorder 的直接输入。
-
-
-## 6. 当前 realtime 数据流是怎么走的
-
-下面按实际执行顺序描述。
-
-### 6.1 视频回放 -> `FramePacket`
+### 6.1 输入层
 
 文件：
 
 - [capture.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/capture.py)
 
-`VideoReplayFrameSource` 会：
+当前支持两种 `FrameSource`：
 
-1. 打开所有 `videos/*.mp4`
-2. 每次从每路视频读取一帧
-3. 给这一逻辑时刻的每路图像打包成一组 `FramePacket`
+- `VideoReplayFrameSource`
+- `LiveCameraFrameSource`
 
-因此一轮 `read()` 的返回值是：
+这层只负责：
 
-```python
-Sequence[FramePacket]
-```
+- 取帧
+- 维护相机 id
+- 产出一批时间对齐的 `FramePacket`
 
-也就是一批同一时刻、不同相机的图像。
+下游并不知道它来自文件还是相机。
 
-### 6.2 `FramePacket` -> `Pose2DPacket`
+### 6.2 2D 感知层
 
 文件：
 
 - [pose2d.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/pose2d.py)
 
-`RealtimePoseEstimator` 会：
+职责：
 
-1. 为每个相机维持独立 `PoseTracker`
-2. 跑 detector + pose
-3. 做 NMS
-4. 做单人 tracking
-5. 只保留一个人
+- 每个相机一套 `PoseTracker`
+- detector + pose
+- NMS
+- 单人 tracking
+- 每相机只保留一个人
 
-输出为每个相机一个 `Pose2DPacket`：
+输出：
 
-```python
-List[Pose2DPacket]
-```
+- `List[Pose2DPacket]`
 
-### 6.3 `Pose2DPacket x N cameras` -> `MultiViewPosePacket`
+### 6.3 单人多视角聚合层
 
 文件：
 
 - [pipeline.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/pipeline.py)
 
-当前 V1 不单独引入 `association.py`。  
-单人场景下，`pipeline._associate()` 直接按 `camera_id` 聚合：
+当前没有单独的 `association.py`。  
+单人场景下，`pipeline._associate()` 直接按 `camera_id` 聚合成：
 
-```python
-List[Pose2DPacket] -> MultiViewPosePacket
-```
+- `MultiViewPosePacket`
 
-### 6.4 `MultiViewPosePacket` -> `Pose3DPacket`
+### 6.4 2D 质量屏蔽层
+
+文件：
+
+- [offline_like_quality.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/offline_like_quality.py)
+
+类：
+
+- `RealtimePose2DQualityMask`
+
+职责：
+
+- 在 triangulation 前，先按离线逻辑屏蔽低 confidence 的 2D 点
+- 若 `score < likelihood_threshold_triangulation`，则对应 `(x, y, score)` 置为 `NaN`
+
+这一步是把离线“低置信度 2D 先不参与三角化”的思想搬到了 realtime。
+
+### 6.5 逐帧三角化层
 
 文件：
 
 - [triangulate_frame.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/triangulate_frame.py)
 
-这一层会：
+类：
 
-1. 读取标定和投影矩阵
-2. 对每个 marker 汇总所有相机的 `(x, y, confidence)`
-3. 调用离线核心数学 `triangulation_from_best_cameras()`
-4. 得到单帧 3D 点
-5. 做 `Z-up -> Y-up` 转换，和离线 `.trc` 一致
+- `RealtimeFrameTriangulator`
 
-输出：
+职责：
 
-```python
-Pose3DPacket
-```
+- 对每个 marker 汇总多相机 `(x, y, confidence)`
+- 调离线核心数学 `triangulation_from_best_cameras()`
+- 做 `Z-up -> Y-up` 坐标变换
+- 输出 `Pose3DPacket`
 
-这里是 realtime 路线里最重要的“2D -> 3D”转换点。
+当前还会在 `metadata` 里附带：
 
-### 6.5 `Pose3DPacket` -> 滤波后的 `Pose3DPacket`
+- `per_marker_reprojection_error`
+- `per_marker_excluded_cameras`
+- `per_marker_valid_after_triangulation`
+
+这些信息后面会被 offline-like quality 继续利用。
+
+### 6.6 offline-like quality 层
+
+文件：
+
+- [offline_like_quality.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/offline_like_quality.py)
+
+类：
+
+- `RealtimeOfflineLikeQualityProcessor`
+
+这是当前 realtime 前处理里非常关键的一层。它不是完整复刻离线整段处理，而是 fixed-lag 近似版，顺序是：
+
+1. 3D quality gate
+2. short-gap interpolation
+3. large-gap fill
+4. Hampel-like outlier replacement
+5. 输出中心帧
+
+它的作用是：
+
+- 在 augmentation 和 IK 之前，先把 raw 3D 尽量清理得更像离线输入
+
+### 6.7 realtime 3D filter
 
 文件：
 
 - [filter_realtime.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/filter_realtime.py)
 
-当前默认是：
+当前支持：
 
+- `PassThroughFilter`
 - `RealtimeKalmanFilter`
+- `RealtimeOneEuroFilter`
+- `RealtimeButterworthWindowFilter`
+- `RealtimeKalmanRTSWindowFilter`
 
-它不是离线那种整段双向滤波，而是：
+通过 [runtime_support.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/runtime_support.py) 的 `build_pose_filter()` 装配。
 
-- 单向
-- 因果
-- 每个 marker 独立维护状态
+注意：
 
-所以这里的输出仍然是：
+- 这层是 raw / cleaned 3D filter
+- 和 augmentation 后的 post-filter 不是同一层
 
-```python
-Pose3DPacket
-```
+### 6.8 marker augmentation 层
 
-只是 `markers_3d` 已经被因果滤波过。
+文件：
 
-### 6.6 `Pose3DPacket` -> `MarkerWindow`
+- [augmentation.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/augmentation.py)
+
+类：
+
+- `RealtimeMarkerAugmenter`
+
+职责：
+
+- 复用离线 LSTM augmenter 资产
+- 对当前 `HALPE_26` 的 3D 点做 fixed-lag augmentation
+- 输出 “原始 marker + LSTM response markers”
+
+关键点：
+
+- 当前只支持 `Body_with_feet / HALPE_26`
+- 当前支持 `center` / `latest`
+- 当前 demo 配置使用 `center`
+
+### 6.9 augmentation 后滤波层
+
+文件：
+
+- [filter_realtime.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/filter_realtime.py)
+- [runtime_support.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/runtime_support.py)
+
+概念上是：
+
+- `post_augmentation_filter`
+
+当前主要支持：
+
+- post-augmentation One Euro
+
+作用：
+
+- 对 augmentation 后的新 marker 再做一层轻量平滑
+
+### 6.10 滑动窗口层
 
 文件：
 
 - [marker_buffer.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/marker_buffer.py)
 
-`SlidingMarkerBuffer` 会：
+类：
 
-1. 每来一帧 `Pose3DPacket` 就 `push`
-2. 当窗口攒满时，返回最近 `T` 帧
+- `SlidingMarkerBuffer`
 
-输出：
+职责：
 
-```python
-MarkerWindow
-```
+- 按 marker layout 缓存最近若干帧 `Pose3DPacket`
+- 在窗口 ready 时输出 `MarkerWindow`
 
-当前窗口大小默认：
-
-- `window_size = 10`
-
-这是当前 realtime 路线里唯一显式使用滑动窗口的位置。
-
-### 6.7 `MarkerWindow` -> `OpenSimStatePacket`
+### 6.11 OpenSim IK 层
 
 文件：
 
 - [opensim_ik.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/opensim_ik.py)
 
-`RealtimeIKSolver` 会：
+类：
 
-1. 从窗口里选出当前模型实际能用的 marker
-2. 在窗口内做缺失值填补
-3. 把 `markers_3d` 组装成 `TimeSeriesTableVec3`
-4. 构造 `MarkerWeightSet`
-5. 构造 `MarkersReference`
-6. 构造 `InverseKinematicsSolver`
-7. 对整个窗口逐时刻调用 `assemble/track`
-8. 取窗口末时刻的 OpenSim `state`
-9. 把 coordinate 导出成 `OpenSimStatePacket`
+- `RealtimeIKSolver`
 
-换句话说：
+职责：
 
-```text
-MarkerWindow(T, M, 3)
--> OpenSim 小窗口 IK
--> 当前 frame 的 coordinate_values
-```
+- 根据当前 marker set 选择模型里实际能用的 markers
+- 对窗口内 marker gap 做填补
+- 组装 `TimeSeriesTableVec3`
+- 创建 `MarkersReference`
+- 在窗口内逐帧 `assemble / track`
+- 输出 `OpenSimStatePacket`
 
-### 6.8 `OpenSimStatePacket` -> Visualizer / Recorder
+这里的 window IK 是当前 realtime OpenSim 主链的核心。
+
+### 6.12 输出层
 
 文件：
 
 - [opensim_viz.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/opensim_viz.py)
 - [recorder.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/recorder.py)
 
-`OpenSimVisualizer`：
+职责：
 
-- 根据 `coordinate_values` 更新本地 OpenSim state
-- 调 `show(state)` 实时显示
-
-`RealtimeRecorder`：
-
-- 可选记录坐标值
-- 可选写 `realtime.mot`
+- visualizer：把 `coordinate_values` 显示到 API visualizer
+- recorder：可选记录 markers、coordinates、`realtime.mot`
 
 
-## 7. 这条 realtime 管线和 `.trc` 回放的本质差别
+## 7. 当前配置层怎么理解
 
-这是理解当前效果差异的关键。
+文件：
 
-### 7.1 `test_opensim_window_visualizer.py` 吃的是什么
+- [config.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/config.py)
 
-该测试脚本默认读取的是离线文件，例如：
+当前关键 realtime 配置块有：
 
-- `Demo_SinglePerson_1-96_filt_butterworth_LSTM.trc`
+- `[realtime.capture]`
+- `[realtime.pose]`
+- `[realtime.offline_like_quality]`
+- `[realtime.filtering]`
+- `[realtime.augmentation]`
+- `[realtime.post_augmentation_filter]`
+- `[realtime.ik]`
+- `[realtime.visualizer]`
+- `[realtime.recorder]`
 
-这意味着它吃到的是：
+### 7.1 当前真正接入主链的配置
 
-- 已经离线三角化过的 3D 点
-- 已经离线滤波过的数据
-- 可能已经过其他后处理
+这些配置块已经接入 runtime 主链：
 
-所以那条路径更像：
+- `capture`
+- `pose`
+- `offline_like_quality`
+- `filtering`
+- `augmentation`
+- `post_augmentation_filter`
+- `ik`
+- `visualizer`
+- `recorder`
 
-```text
-高质量离线 marker
--> 小窗口 IK
--> Visualizer
-```
+### 7.2 当前保留但没有接入主链的旧实验配置
 
-### 7.2 `run_file_replay.py` 吃的是什么
+配置里还保留了：
 
-production realtime 路线吃到的是：
+- `pre_augmentation_cleanup`
 
-```text
-视频
--> 当前帧 2D
--> 当前帧 3D
--> 因果滤波
--> 小窗口 IK
-```
+但按当前 [runtime_support.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/runtime_support.py) 的实际装配逻辑，这一层**没有进入当前主链**。  
+也就是说：
 
-所以它天然会：
+- 它还在 config dataclass 里
+- 日志也会识别它
+- 但当前 pipeline 真实执行时，不再使用这一层
 
-- 更抖
-- 更依赖前半段 2D/3D 质量
-- 不可能直接等同于离线 `.trc` 效果
+理解项目时，应该把它视为：
 
-这不是因为 realtime 设计错了，而是因为：
-
-- 两条链的输入质量不同
-- 一条是“离线后处理结果”
-- 一条是“在线生成结果”
-
-
-## 8. benchmark 是在哪一层量的
-
-当前 benchmark 是在 [run_file_replay.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/run_file_replay.py) 里按阶段统计的。
-
-对应关系如下：
-
-- `capture_avg_ms`
-  - `capture.py`
-- `pose2d_avg_ms`
-  - `pose2d.py`
-- `triangulate_avg_ms`
-  - `triangulate_frame.py`
-- `filter_avg_ms`
-  - `filter_realtime.py`
-- `ik_avg_ms`
-  - `opensim_ik.py`
-
-因此 benchmark 不是黑箱总时间，而是已经和模块结构对应起来了。
+- **保留的旧实验配置**
+而不是：
+- 当前主链的一部分
 
 
-## 9. 当前 realtime V1 的关键工程判断
+## 8. 当前 fixed-lag 都来自哪里
 
-结合此前 `opus第三次.md` 与 `gpt第三次.md` 的共识，以及当前代码现状，可以把 realtime V1 理解成：
+当前 realtime 已经不只是一个 IK 窗口。
 
-### 9.1 已经完成的改造
+可能引入 fixed-lag 的层包括：
 
-- 从文件中间件改为 packet 内存传递
-- 建立了平行于离线流程的 `realtime/`
-- 用 `MarkerWindow + RealtimeIKSolver` 替代离线 `TRC -> IK Tool`
-- 用 `API Visualizer` 替代 `OpenSim GUI` 作为第一版在线显示后端
+- `offline_like_quality.output_mode = center`
+- `filtering.type = butterworth / kalman_rts`
+- `augmentation.output_mode = center`
+- `ik.window_size`
 
-### 9.2 还没有做的事情
+其中：
 
-- 自动同步
-- 多人关联
-- marker augmentation
-- 服务器到客户端传输
-- 更强的固定延迟平滑 / smoother
-- 更高质量的实时 2D/3D 前半段
+- quality / augmentation 的 `center` 会吃掉头尾帧，并引入显式延迟
+- IK 窗口主要引入 warm-up，而不是同样意义上的中心帧延迟
 
-### 9.3 当前最重要的现实边界
-
-当前 realtime V1 是：
-
-- 一条结构清晰的、可运行的、以内存为主通路的在线 OpenSim 管线
-
-但它还不是：
-
-- 一个已经达到离线质量的最终系统
-- 一个多人、跨机器、强鲁棒的完整产品
+当前 [runtime_support.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/runtime_support.py) 也会在日志里打印 fixed-lag 估算。
 
 
-## 10. 一句话总结
+## 9. 当前 Demo_SinglePerson 的默认理解方式
 
-当前 `Pose2Sim/realtime/` 的本质是：
-
-**用一组显式定义的内存 packet，把“多视频回放 -> 2D -> 3D -> 小窗口 IK -> OpenSim state” 这条链从离线文件流水线改造成了在线内存流水线。**
-
-最关键的内存对象是：
+如果你现在只想用一句话记住 Demo 当前主链，可以记成：
 
 ```text
-FramePacket
--> Pose2DPacket
--> MultiViewPosePacket
--> Pose3DPacket
--> MarkerWindow
--> OpenSimStatePacket
+4 路同步视频
+-> 单人 HALPE_26
+-> 离线风格质量清洗
+-> Kalman
+-> LSTM marker augmentation
+-> augmentation 后 One Euro
+-> simple OpenSim model 的小窗口 IK
+-> visualizer / recorder
 ```
 
-而最关键的改造点不是“把旧脚本提速”，而是：
+这已经比最早的 realtime V1 设想更完整，也更接近离线工作流。
 
-**把数据契约从磁盘文件改成了模块之间直接传递的内存对象。**
+
+## 10. 当前已知边界
+
+### 10.1 明确支持的方向
+
+- 单人
+- replay
+- live camera
+- API visualizer
+- simple model realtime baseline
+- offline-like quality + augmentation + post-filter 的组合
+
+### 10.2 当前仍然要注意的边界
+
+- realtime 仍然不是离线整段算法的完整复刻
+- 三角化仍然是 per-frame 为主，后面再做 fixed-lag 清洗
+- 当前 `RealtimeFrameTriangulator` 仍要求 runtime `camera_ids` 与 calibration 相机集合一致
+- 当前主链更适合固定动作、固定 rig 的场景，而不是完全自由场景
+
+
+## 11. 阅读代码的推荐顺序
+
+如果你想从“能看懂这项目”出发，而不是一上来钻实现细节，最推荐按这个顺序读：
+
+1. [run_file_replay.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/run_file_replay.py)  
+   先看入口怎么启动
+
+2. [runtime_support.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/runtime_support.py)  
+   看模块是怎么装起来的
+
+3. [pipeline.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/pipeline.py)  
+   看一帧数据是怎么一步步往下走的
+
+4. [packets.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/packets.py)  
+   看每层输入输出是什么
+
+5. [offline_like_quality.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/offline_like_quality.py)  
+   看当前前处理为什么比早期版本复杂很多
+
+6. [augmentation.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/augmentation.py)  
+   看 marker augmentation 是怎么插进来的
+
+7. [opensim_ik.py](/Users/danny/.codex/worktrees/6c16/pose2sim/Pose2Sim/realtime/opensim_ik.py)  
+   看 realtime OpenSim 小窗口 IK 的核心
+
+
+## 12. 一句话总结
+
+当前 `Pose2Sim/realtime/` 已经不是“简化版逐帧 IK demo”，而是一条共享 replay/live 输入、带 offline-like 质量清洗、marker augmentation、后处理滤波和 rolling-window IK 的在线 OpenSim 管线。
