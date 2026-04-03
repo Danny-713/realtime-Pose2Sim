@@ -76,10 +76,26 @@ class RealtimeFrameTriangulator:
         self.camera_ids = self._resolve_camera_order(camera_ids)
         self.camera_index_by_id = {camera_id: idx for idx, camera_id in enumerate(self.camera_ids)}
         self.swap_indices = self._build_swap_indices(self.marker_names)
+        self.coordinate_transform = self._resolve_coordinate_transform(config_dict)
 
         from Pose2Sim.triangulation import triangulation_from_best_cameras
 
         self._triangulation_from_best_cameras = triangulation_from_best_cameras
+
+    @staticmethod
+    def _resolve_coordinate_transform(config_dict: Mapping[str, object]) -> str:
+        realtime_cfg = config_dict.get("realtime", {})
+        if isinstance(realtime_cfg, Mapping):
+            triangulation_cfg = realtime_cfg.get("triangulation", {})
+            if isinstance(triangulation_cfg, Mapping):
+                transform = str(triangulation_cfg.get("coordinate_transform", "zup_to_yup")).lower()
+                if transform in {"zup_to_yup", "identity"}:
+                    return transform
+                raise ValueError(
+                    "Unsupported realtime.triangulation.coordinate_transform="
+                    f"{transform!r}. Expected 'zup_to_yup' or 'identity'."
+                )
+        return "zup_to_yup"
 
     @staticmethod
     def _zup_to_yup(markers_3d: np.ndarray) -> np.ndarray:#坐标轴转换，Z-up to Y-up
@@ -98,6 +114,12 @@ class RealtimeFrameTriangulator:
                 f"RealtimeFrameTriangulator expected marker data of shape (n_markers, 3), got {markers_3d.shape}."
             )
         return markers_3d[:, [1, 2, 0]]
+
+    def _apply_coordinate_transform(self, markers_3d: np.ndarray) -> np.ndarray:
+        markers_3d = np.asarray(markers_3d, dtype=float)
+        if self.coordinate_transform == "identity":
+            return markers_3d
+        return self._zup_to_yup(markers_3d)
 
     def _resolve_camera_order(self, runtime_camera_ids: Sequence[str]) -> tuple[str, ...]:#相机顺序解析
         runtime_ids = {str(camera_id).lower(): str(camera_id) for camera_id in runtime_camera_ids}
@@ -169,7 +191,7 @@ class RealtimeFrameTriangulator:
             per_marker_valid_after_triangulation.append(bool(np.isfinite(q_array).all() and np.isfinite(error_min)))
 
         marker_array = np.asarray(marker_positions, dtype=float)
-        marker_array = self._zup_to_yup(marker_array)
+        marker_array = self._apply_coordinate_transform(marker_array)
         reprojection_error = float(np.mean(reprojection_errors)) if reprojection_errors else np.nan
 
         return Pose3DPacket(
