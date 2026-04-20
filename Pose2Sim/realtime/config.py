@@ -52,6 +52,7 @@ class RealtimeAugmentationConfig:
     min_window_size: int = 15
     output_mode: str = "center"
     feet_on_floor: bool = False
+    first_frame_feet_on_floor: bool = False
     use_subject_stats: bool = True
 
 
@@ -419,6 +420,7 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
         min_window_size=int(augmentation_cfg.get("min_window_size", 15)),
         output_mode=str(augmentation_cfg.get("output_mode", "center")).lower(),
         feet_on_floor=bool(augmentation_cfg.get("feet_on_floor", False)),
+        first_frame_feet_on_floor=bool(augmentation_cfg.get("first_frame_feet_on_floor", False)),
         use_subject_stats=bool(augmentation_cfg.get("use_subject_stats", True)),
     )
     enriched_rt_augmentation: Dict[str, Any] = dict(enriched_rt.get("augmentation", {}))
@@ -429,6 +431,9 @@ def load_realtime_config(config: Union[None, str, Mapping[str, Any]] = None) -> 
     enriched_rt_augmentation.setdefault("min_window_size", rt_augmentation.min_window_size)
     enriched_rt_augmentation.setdefault("output_mode", rt_augmentation.output_mode)
     enriched_rt_augmentation.setdefault("feet_on_floor", rt_augmentation.feet_on_floor)
+    enriched_rt_augmentation.setdefault(
+        "first_frame_feet_on_floor", rt_augmentation.first_frame_feet_on_floor
+    )
     enriched_rt_augmentation.setdefault("use_subject_stats", rt_augmentation.use_subject_stats)
     enriched_rt["augmentation"] = enriched_rt_augmentation
 

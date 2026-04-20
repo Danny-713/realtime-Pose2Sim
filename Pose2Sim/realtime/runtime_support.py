@@ -281,6 +281,7 @@ def build_runtime_pipeline(
             min_window_size=realtime_config.augmentation.min_window_size,
             output_mode=realtime_config.augmentation.output_mode,
             feet_on_floor=realtime_config.augmentation.feet_on_floor,
+            first_frame_feet_on_floor=realtime_config.augmentation.first_frame_feet_on_floor,
             use_subject_stats=realtime_config.augmentation.use_subject_stats,
         )
         expected_marker_names = marker_augmenter.output_marker_names

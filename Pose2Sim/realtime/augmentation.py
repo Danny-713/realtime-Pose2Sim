@@ -76,6 +76,8 @@ LOWER_RESPONSE_MARKERS = (
     "RHJC_study",
     "LHJC_study",
 )
+
+FLOOR_REFERENCE_NAME_PARTS = ("ankle", "heel", "toe", "calc", "meta")
 UPPER_FEATURE_MARKERS = (
     "Neck",
     "RShoulder",
@@ -158,6 +160,7 @@ class RealtimeMarkerAugmenter:
         min_window_size: int = 15,
         output_mode: str = "center",
         feet_on_floor: bool = False,
+        first_frame_feet_on_floor: bool = False,
         use_subject_stats: bool = True,
     ):
         normalized_pose_model = _normalize_pose_model_name(pose_model)
@@ -183,10 +186,16 @@ class RealtimeMarkerAugmenter:
         if self.output_mode not in {"center", "latest"}:
             raise ValueError("realtime.augmentation.output_mode must be 'center' or 'latest'.")
         self.feet_on_floor = bool(feet_on_floor)
+        self.first_frame_feet_on_floor = bool(first_frame_feet_on_floor)
+        if self.feet_on_floor and self.first_frame_feet_on_floor:
+            raise ValueError(
+                "RealtimeMarkerAugmenter supports either feet_on_floor or first_frame_feet_on_floor, not both."
+            )
         self.use_subject_stats = bool(use_subject_stats)
         self._packets: Deque[Pose3DPacket] = deque(maxlen=self.window_size)
         self._raw_marker_names: Optional[tuple[str, ...]] = tuple(raw_marker_names) if raw_marker_names else None
         self._subject_height_m: Optional[float] = None
+        self._first_frame_floor_offset_y: Optional[float] = None
 
         augmenter_root = Path(__file__).resolve().parents[1] / "MarkerAugmenter" / self.model_name
         self._lower = _AugmenterSession(
@@ -248,6 +257,14 @@ class RealtimeMarkerAugmenter:
             min_y = float(np.nanmin(response_sequence[output_index][:, 1]))
             if np.isfinite(min_y):
                 merged_markers[:, 1] = merged_markers[:, 1] - (min_y - 0.01)
+        elif self.first_frame_feet_on_floor:
+            merged_marker_names = self.output_marker_names or marker_names
+            if self._first_frame_floor_offset_y is None:
+                reference_y = self._floor_reference_y(merged_markers, merged_marker_names)
+                if np.isfinite(reference_y):
+                    self._first_frame_floor_offset_y = reference_y - 0.01
+            if self._first_frame_floor_offset_y is not None:
+                merged_markers[:, 1] = merged_markers[:, 1] - self._first_frame_floor_offset_y
 
         metadata = dict(center_packet.metadata)
         metadata.update(
@@ -260,8 +277,12 @@ class RealtimeMarkerAugmenter:
                 "augmentation_subject_height_m": float(height_m),
                 "augmentation_subject_mass_kg": float(mass_kg),
                 "augmentation_added_markers": len(self.response_marker_names),
+                "augmentation_feet_on_floor": self.feet_on_floor,
+                "augmentation_first_frame_feet_on_floor": self.first_frame_feet_on_floor,
             }
         )
+        if self._first_frame_floor_offset_y is not None:
+            metadata["augmentation_floor_offset_y"] = float(self._first_frame_floor_offset_y)
 
         return Pose3DPacket(
             frame_id=center_packet.frame_id,
@@ -282,6 +303,22 @@ class RealtimeMarkerAugmenter:
         if self.output_mode == "center":
             return window_length // 2
         return window_length - 1
+
+    @staticmethod
+    def _floor_reference_y(markers_3d: np.ndarray, marker_names: Sequence[str]) -> float:
+        floor_indices = [
+            index
+            for index, marker_name in enumerate(marker_names)
+            if any(part in str(marker_name).lower() for part in FLOOR_REFERENCE_NAME_PARTS)
+        ]
+        if not floor_indices:
+            return float("nan")
+
+        floor_markers = np.asarray(markers_3d[floor_indices, :], dtype=float)
+        finite_y = floor_markers[np.isfinite(floor_markers[:, 1]), 1]
+        if finite_y.size == 0:
+            return float("nan")
+        return float(np.min(finite_y))
 
     def _build_marker_lookup(self, packets: Sequence[Pose3DPacket]) -> dict[str, np.ndarray]:
         marker_names = tuple(packets[0].marker_names)
